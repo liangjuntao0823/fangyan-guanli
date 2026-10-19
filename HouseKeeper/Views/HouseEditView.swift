@@ -144,17 +144,24 @@ struct HouseEditView: View {
                                                 MediaThumbView(media: media, roomKey: originalRoomKey.isEmpty ? currentRoomKey : originalRoomKey)
                                             )
                                             .clipShape(RoundedRectangle(cornerRadius: 8))
+                                            .contentShape(RoundedRectangle(cornerRadius: 8))
 
+                                        // 删除按钮：必须限定尺寸 + borderless 样式，防止点击区域扩大到整格
+                                        // （此前 Button 直接放 ZStack 无约束，Form+LazyVGrid 下整格都会被判定为按钮，
+                                        //   导致「点图片任意区域就触发删除」）
                                         Button {
                                             // 单条删除：只移除 fileName 完全匹配的这一条，其余不受影响
                                             removeMedia(fileName: media.fileName)
                                         } label: {
                                             Image(systemName: "xmark.circle.fill")
-                                                .font(.system(size: 20))
+                                                .font(.system(size: 18))
                                                 .foregroundColor(.white)
                                                 .shadow(radius: 2)
-                                                .padding(4)
                                         }
+                                        .buttonStyle(.borderless)
+                                        .frame(width: 32, height: 32)
+                                        .contentShape(Rectangle())
+                                        .padding(3)
                                     }
                                 }
                             }

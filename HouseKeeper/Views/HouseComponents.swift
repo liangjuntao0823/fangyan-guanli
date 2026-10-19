@@ -85,10 +85,11 @@ struct MediaThumbView: View {
         if media.kind == "video" {
             ZStack {
                 VideoThumbnailView(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundColor(.white)
-                    .shadow(radius: 3)
+                // 播放三角：缩小 + 半透明，不遮挡画面
+                Image(systemName: "play.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(.white.opacity(0.72))
+                    .shadow(radius: 2)
             }
         } else {
             thumbImage
@@ -188,10 +189,11 @@ struct HouseCardView: View {
             if let firstVideo = house.videos.first {
                 ZStack {
                     MediaThumbView(media: firstVideo, roomKey: house.mediaRoomKey)
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundColor(.white)
-                        .shadow(radius: 3)
+                    // 播放三角：缩小 + 半透明，不遮挡画面
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.white.opacity(0.72))
+                        .shadow(radius: 2)
                 }
             } else if let first = house.photos.first {
                 MediaThumbView(media: first, roomKey: house.mediaRoomKey)
