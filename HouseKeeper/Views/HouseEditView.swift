@@ -280,7 +280,7 @@ struct HouseEditView: View {
 
         for item in items {
             // PhotosUI 的 Movie 类型是选择视频的标准可靠方式（直接提供临时文件 URL）
-            if let movie = try? await item.loadTransferable(type: Movie.self) {
+            if let movie = try? await item.loadTransferable(type: PhotosUI.Movie.self) {
                 let fileName = MediaStore.saveFile(from: movie.url, roomKey: currentRoomKey)
                 mediaItems.append(MediaItem(fileName: fileName, kind: "video"))
             }
