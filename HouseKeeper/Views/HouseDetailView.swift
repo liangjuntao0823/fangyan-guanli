@@ -16,7 +16,7 @@ struct HouseDetailView: View {
     @State private var previewRoute: PhotoPreviewRoute? = nil
     @State private var shareItems: [Any] = []
     @State private var isSelecting = false          // 多选模式
-    @State private var selectedMediaIDs = Set<UUID>()
+    @State private var selectedMediaNames = Set<String>()   // 用唯一 fileName 标记选中
     @State private var saveTip: String?
 
     var body: some View {
@@ -107,7 +107,8 @@ struct HouseDetailView: View {
             } else {
                 if !house.photos.isEmpty {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-                        ForEach(Array(house.photos.enumerated()), id: \.element.id) { index, media in
+                        // 用唯一 fileName 作标识（MediaItem.id 在 SwiftData 新对象上可能相同）
+                        ForEach(Array(house.photos.enumerated()), id: \.element.fileName) { index, media in
                             // 固定正方形格子，内容缩放裁切填满，横屏照片也不会溢出重叠
                             Color.clear
                                 .aspectRatio(1, contentMode: .fit)
@@ -118,7 +119,7 @@ struct HouseDetailView: View {
                                 .contentShape(RoundedRectangle(cornerRadius: 8))
                                 .overlay(alignment: .topLeading) {
                                     if isSelecting {
-                                        Image(systemName: selectedMediaIDs.contains(media.id) ? "checkmark.circle.fill" : "circle")
+                                        Image(systemName: selectedMediaNames.contains(media.fileName) ? "checkmark.circle.fill" : "circle")
                                             .font(.system(size: 20))
                                             .foregroundColor(.white)
                                             .shadow(radius: 2)
@@ -137,7 +138,7 @@ struct HouseDetailView: View {
                 }
 
                 if !house.videos.isEmpty {
-                    ForEach(house.videos) { media in
+                    ForEach(house.videos, id: \.fileName) { media in
                         if isSelecting {
                             // 多选模式下视频显示为缩略图，点击选中
                             Color.clear
@@ -148,7 +149,7 @@ struct HouseDetailView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                                 .contentShape(RoundedRectangle(cornerRadius: 12))
                                 .overlay(alignment: .topLeading) {
-                                    Image(systemName: selectedMediaIDs.contains(media.id) ? "checkmark.circle.fill" : "circle")
+                                    Image(systemName: selectedMediaNames.contains(media.fileName) ? "checkmark.circle.fill" : "circle")
                                         .font(.system(size: 20))
                                         .foregroundColor(.white)
                                         .shadow(radius: 2)
@@ -196,20 +197,20 @@ struct HouseDetailView: View {
     // MARK: - 多选 / 保存到相册
 
     private func toggleSelect(_ media: MediaItem) {
-        if selectedMediaIDs.contains(media.id) {
-            selectedMediaIDs.remove(media.id)
+        if selectedMediaNames.contains(media.fileName) {
+            selectedMediaNames.remove(media.fileName)
         } else {
-            selectedMediaIDs.insert(media.id)
+            selectedMediaNames.insert(media.fileName)
         }
     }
 
     private func exitSelecting() {
         isSelecting = false
-        selectedMediaIDs.removeAll()
+        selectedMediaNames.removeAll()
     }
 
     private func saveSelectedToAlbum() {
-        let selected = house.mediaItems.filter { selectedMediaIDs.contains($0.id) }
+        let selected = house.mediaItems.filter { selectedMediaNames.contains($0.fileName) }
         guard !selected.isEmpty else { return }
 
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
@@ -455,7 +456,7 @@ struct PhotoPreviewView: View {
             Color.black.ignoresSafeArea()
 
             TabView(selection: $currentIndex) {
-                ForEach(Array(photos.enumerated()), id: \.element.id) { index, media in
+                ForEach(Array(photos.enumerated()), id: \.element.fileName) { index, media in
                     if let image = UIImage(contentsOfFile: MediaStore.url(for: media.fileName, roomKey: roomKey).path) {
                         Image(uiImage: image)
                             .resizable()

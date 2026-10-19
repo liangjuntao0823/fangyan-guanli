@@ -134,7 +134,9 @@ struct HouseEditView: View {
                                 .foregroundColor(.secondary)
                         } else {
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-                                ForEach(Array(mediaItems.enumerated()), id: \.element.id) { _, media in
+                                // 用唯一的 fileName 作标识，不用 MediaItem.id：
+                                // SwiftData 新对象（未保存）的 id 不可靠，可能全部相同导致一次全删
+                                ForEach(mediaItems, id: \.fileName) { media in
                                     ZStack(alignment: .topTrailing) {
                                         // 固定正方形格子，内容缩放裁切填满，横屏照片不重叠
                                         Color.clear
@@ -253,7 +255,7 @@ struct HouseEditView: View {
         // 只在保存时执行 → 点「取消」不会落盘，删除可完整回滚
         if let house {
             let removed = house.mediaItems.filter { old in
-                !mediaItems.contains { $0.id == old.id }
+                !mediaItems.contains { $0.fileName == old.fileName }
             }
             for old in removed {
                 MediaStore.delete(fileName: old.fileName, roomKey: originalRoomKey.isEmpty ? house.mediaRoomKey : originalRoomKey)
@@ -293,11 +295,13 @@ struct HouseEditView: View {
     // MARK: - 媒体处理
 
     private func removeMedia(_ media: MediaItem) {
-        mediaItems.removeAll { $0.id == media.id }
+        // 按唯一 fileName 定位并移除该条（不用 MediaItem.id，避免 SwiftData 新对象 id 相同导致全删）
+        guard let index = mediaItems.firstIndex(where: { $0.fileName == media.fileName }) else { return }
+        let removed = mediaItems.remove(at: index)
 
         // 未保存的新增媒体（文件已写盘但尚未关联房源）：立即清理文件，避免残留孤儿文件
-        if media.house == nil {
-            MediaStore.delete(fileName: media.fileName, roomKey: originalRoomKey.isEmpty ? currentRoomKey : originalRoomKey)
+        if removed.house == nil {
+            MediaStore.delete(fileName: removed.fileName, roomKey: originalRoomKey.isEmpty ? currentRoomKey : originalRoomKey)
         }
         // 已有记录：这里只从暂存数组移除，不删文件、不删数据库记录
         // 点「保存」时才真正删除；点「取消」则完整回滚（需求：取消后删除不能生效）

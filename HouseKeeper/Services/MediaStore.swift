@@ -47,7 +47,9 @@ enum MediaStore {
     }
 
     /// 删除文件（删除房源 / 删除单条媒体时调用），新旧两处路径都清理
+    /// 防御：fileName 为空时绝不执行——否则 appendingPathComponent("") 会指向目录本身，removeItem 会误删整个房号目录
     static func delete(fileName: String, roomKey: String) {
+        guard !fileName.isEmpty else { return }
         let newURL = houseDirectory(roomKey: roomKey).appendingPathComponent(fileName)
         try? FileManager.default.removeItem(at: newURL)
         let legacyURL = mediaDirectory().appendingPathComponent(fileName)
