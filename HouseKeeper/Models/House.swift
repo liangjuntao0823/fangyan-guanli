@@ -96,6 +96,12 @@ extension House {
         return raw.components(separatedBy: illegal).joined(separator: "-")
     }
 
+    /// 房号数字部分（用于首页按「座号 + 房号」升序排序，如 1420上 → 1420）
+    var sortRoomNo: Int {
+        let digits = roomNo.prefix { $0.isNumber }
+        return Int(digits) ?? 0
+    }
+
     var priceText: String { "\(price)元/月" }
 
     var hasPhoto: Bool { mediaItems.contains { $0.kind == "image" } }

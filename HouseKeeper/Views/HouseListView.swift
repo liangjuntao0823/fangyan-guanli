@@ -7,26 +7,34 @@ struct HouseListView: View {
 
     @State private var searchText = ""
     @State private var towerFilter: Int? = nil      // nil = 全部
-    @State private var statusFilter: HouseStatus? = nil
+    @State private var statusFilter: HouseStatus? = .available   // 首页默认显示待租房源
     @State private var layoutFilter: String? = nil
     @State private var showAdd = false
 
+    /// 筛选后的房源：默认待租，并按「座号 + 房号」升序排列（1座在前，同座按房号数字从小到大）
     private var filteredHouses: [House] {
-        houses.filter { house in
-            let matchSearch: Bool = {
-                guard !searchText.isEmpty else { return true }
-                let keyword = searchText.lowercased()
-                return house.roomNo.lowercased().contains(keyword)
-                    || house.displayRoomNo.lowercased().contains(keyword)
-                    || house.landlord.lowercased().contains(keyword)
-                    || house.layout.lowercased().contains(keyword)
-                    || house.remark.lowercased().contains(keyword)
-            }()
-            let matchTower = towerFilter == nil || house.tower == towerFilter
-            let matchStatus = statusFilter == nil || house.status == statusFilter
-            let matchLayout = layoutFilter == nil || house.layout == layoutFilter
-            return matchSearch && matchTower && matchStatus && matchLayout
-        }
+        houses
+            .filter { house in
+                let matchSearch: Bool = {
+                    guard !searchText.isEmpty else { return true }
+                    let keyword = searchText.lowercased()
+                    return house.roomNo.lowercased().contains(keyword)
+                        || house.displayRoomNo.lowercased().contains(keyword)
+                        || house.landlord.lowercased().contains(keyword)
+                        || house.layout.lowercased().contains(keyword)
+                        || house.remark.lowercased().contains(keyword)
+                }()
+                let matchTower = towerFilter == nil || house.tower == towerFilter
+                let matchStatus = statusFilter == nil || house.status == statusFilter
+                let matchLayout = layoutFilter == nil || house.layout == layoutFilter
+                return matchSearch && matchTower && matchStatus && matchLayout
+            }
+            .sorted { a, b in
+                if a.tower != b.tower { return a.tower < b.tower }
+                if a.sortRoomNo != b.sortRoomNo { return a.sortRoomNo < b.sortRoomNo }
+                // 同号同层（如 1420上 / 1420下）：按原始房号字符串稳定排序
+                return a.roomNo < b.roomNo
+            }
     }
 
     private var layouts: [String] {
