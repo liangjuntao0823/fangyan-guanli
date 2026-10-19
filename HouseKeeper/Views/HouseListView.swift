@@ -30,7 +30,7 @@ struct HouseListView: View {
     }
 
     private var layouts: [String] {
-        Array(Set(houses.map(\.layout))).sorted()
+        Array(Set(houses.compactMap { $0.layout.isEmpty ? nil : $0.layout })).sorted()
     }
 
     private var tower1Count: Int { houses.filter { $0.tower == 1 }.count }
@@ -121,60 +121,54 @@ struct HouseListView: View {
         .padding(.vertical, 10)
     }
 
-    // MARK: - 分类检索（座号 / 状态 / 户型）
+    // MARK: - 分类检索（第一行：座号 / 状态；第二行：户型）
 
     private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                filterChip(title: "全部座", isOn: towerFilter == nil) {
-                    towerFilter = nil
-                }
-                filterChip(title: "1座", isOn: towerFilter == 1) {
-                    towerFilter = 1
-                }
-                filterChip(title: "2座", isOn: towerFilter == 2) {
-                    towerFilter = 2
-                }
+        VStack(spacing: 8) {
+            // 第一行：座号 + 状态
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    filterChip(title: "全部座", isOn: towerFilter == nil) {
+                        towerFilter = nil
+                    }
+                    filterChip(title: "1座", isOn: towerFilter == 1) {
+                        towerFilter = 1
+                    }
+                    filterChip(title: "2座", isOn: towerFilter == 2) {
+                        towerFilter = 2
+                    }
 
-                Divider().frame(height: 16)
-
-                filterChip(title: "全部状态", isOn: statusFilter == nil) {
-                    statusFilter = nil
-                }
-                filterChip(title: "待租", isOn: statusFilter == .available) {
-                    statusFilter = .available
-                }
-                filterChip(title: "已租", isOn: statusFilter == .rented) {
-                    statusFilter = .rented
-                }
-
-                if !layouts.isEmpty {
                     Divider().frame(height: 16)
-                    Menu {
-                        Button("全部户型") { layoutFilter = nil }
-                        ForEach(layouts, id: \.self) { layout in
-                            Button(layout) { layoutFilter = layout }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.caption)
-                            Text(layoutFilter ?? "户型")
-                                .font(.footnote)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.white)
-                        .clipShape(Capsule())
-                        .overlay(
-                            Capsule().stroke(Color.gray.opacity(0.3), lineWidth: 1)
-                        )
+
+                    filterChip(title: "全部状态", isOn: statusFilter == nil) {
+                        statusFilter = nil
+                    }
+                    filterChip(title: "待租", isOn: statusFilter == .available) {
+                        statusFilter = .available
+                    }
+                    filterChip(title: "已租", isOn: statusFilter == .rented) {
+                        statusFilter = .rented
                     }
                 }
+                .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 10)
+
+            // 第二行：户型筛选（独立一行，选项随已收录房源的户型动态增减）
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    filterChip(title: "全部户型", isOn: layoutFilter == nil) {
+                        layoutFilter = nil
+                    }
+                    ForEach(layouts, id: \.self) { layout in
+                        filterChip(title: layout, isOn: layoutFilter == layout) {
+                            layoutFilter = layout
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
         }
+        .padding(.bottom, 10)
     }
 
     private func filterChip(title: String, isOn: Bool, action: @escaping () -> Void) -> some View {

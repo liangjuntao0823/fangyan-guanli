@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import AVKit
+import Photos
 
 struct HouseDetailView: View {
     @Environment(\.modelContext) private var modelContext
@@ -279,6 +280,7 @@ struct PhotoPreviewView: View {
     let roomKey: String
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
+    @State private var saveMessage: String?
 
     init(photos: [MediaItem], startIndex: Int, roomKey: String) {
         self.photos = photos
@@ -298,6 +300,14 @@ struct PhotoPreviewView: View {
                             .resizable()
                             .scaledToFit()
                             .tag(index)
+                            // 长按弹出菜单：保存到相册（和微信一致）
+                            .contextMenu {
+                                Button {
+                                    saveImageToAlbum(image)
+                                } label: {
+                                    Label("保存到相册", systemImage: "square.and.arrow.down")
+                                }
+                            }
                     }
                 }
             }
@@ -313,5 +323,35 @@ struct PhotoPreviewView: View {
             }
         }
         .statusBarHidden()
+        .alert("保存到相册", isPresented: Binding(
+            get: { saveMessage != nil },
+            set: { if !$0 { saveMessage = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(saveMessage ?? "")
+        }
+    }
+
+    /// 保存当前图片到系统相册（仅新增写入权限）
+    private func saveImageToAlbum(_ image: UIImage) {
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            switch status {
+            case .authorized, .limited:
+                PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAsset(from: image)
+                } completionHandler: { success, error in
+                    DispatchQueue.main.async {
+                        saveMessage = success
+                            ? "已保存到相册"
+                            : "保存失败：\(error?.localizedDescription ?? "未知错误")"
+                    }
+                }
+            default:
+                DispatchQueue.main.async {
+                    saveMessage = "没有相册写入权限，请在 设置 → 隐私与安全 → 照片 中允许"
+                }
+            }
+        }
     }
 }

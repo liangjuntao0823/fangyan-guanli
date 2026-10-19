@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVKit
 
 // MARK: - 主题色（沿用网页版配色方向：深墨蓝 + 暖白 + 琥珀）
 
@@ -77,11 +78,20 @@ struct MediaThumbView: View {
 struct HouseCardView: View {
     let house: House
 
+    @State private var previewRoute: PhotoPreviewRoute? = nil
+    @State private var playingVideo: MediaItem? = nil
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            coverView
-                .frame(width: 92, height: 76)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+            // 封面：有视频 → 视频缩略图 + 播放；无视频 → 首图，点击放大左右滑动浏览全部照片
+            Button {
+                openCover()
+            } label: {
+                coverView
+            }
+            .buttonStyle(.plain)
+            .frame(width: 92, height: 76)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
@@ -126,15 +136,26 @@ struct HouseCardView: View {
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 1)
+        .fullScreenCover(item: $previewRoute) { route in
+            PhotoPreviewView(photos: house.photos, startIndex: route.index, roomKey: house.mediaRoomKey)
+        }
+        .fullScreenCover(item: $playingVideo) { media in
+            FullScreenVideoPlayer(media: media, roomKey: house.mediaRoomKey)
+        }
     }
 
     private var coverView: some View {
         Group {
-            if let first = house.photos.first,
-               let image = UIImage(contentsOfFile: MediaStore.url(for: first.fileName, roomKey: house.mediaRoomKey).path) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
+            if let firstVideo = house.videos.first {
+                ZStack {
+                    MediaThumbView(media: firstVideo, roomKey: house.mediaRoomKey)
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundColor(.white)
+                        .shadow(radius: 3)
+                }
+            } else if let first = house.photos.first {
+                MediaThumbView(media: first, roomKey: house.mediaRoomKey)
             } else {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10)
@@ -144,6 +165,54 @@ struct HouseCardView: View {
                         .foregroundColor(AppTheme.primary.opacity(0.35))
                 }
             }
+        }
+    }
+
+    /// 点封面：优先播放视频；没有视频则放大首图，可左右滑动浏览全部照片
+    private func openCover() {
+        if let firstVideo = house.videos.first {
+            playingVideo = firstVideo
+        } else if !house.photos.isEmpty {
+            previewRoute = PhotoPreviewRoute(index: 0)
+        }
+    }
+}
+
+// MARK: - 全屏视频播放器（卡片点封面播放用）
+
+struct FullScreenVideoPlayer: View {
+    let media: MediaItem
+    let roomKey: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            if let player {
+                VideoPlayer(player: player)
+            }
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundColor(.white.opacity(0.85))
+                    .padding(18)
+            }
+        }
+        .statusBarHidden()
+        .onAppear {
+            if player == nil {
+                player = AVPlayer(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
+                player?.play()
+            }
+        }
+        .onDisappear {
+            player?.pause()
+            player = nil
         }
     }
 }

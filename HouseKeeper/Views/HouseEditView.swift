@@ -220,6 +220,18 @@ struct HouseEditView: View {
             modelContext.insert(target)
         }
 
+        // 编辑时：真正删除「已被移除」的旧媒体（文件 + 记录）
+        // 只在保存时执行 → 点「取消」不会落盘，删除可完整回滚
+        if let house {
+            let removed = house.mediaItems.filter { old in
+                !mediaItems.contains { $0.id == old.id }
+            }
+            for old in removed {
+                MediaStore.delete(fileName: old.fileName, roomKey: originalRoomKey.isEmpty ? house.mediaRoomKey : originalRoomKey)
+                modelContext.delete(old)
+            }
+        }
+
         // 编辑时房号变更 → 媒体目录整体迁移，文件不丢失
         if isEditing, let house {
             let newRoomKey: String = {
@@ -252,11 +264,14 @@ struct HouseEditView: View {
     // MARK: - 媒体处理
 
     private func removeMedia(_ media: MediaItem) {
-        MediaStore.delete(fileName: media.fileName, roomKey: originalRoomKey.isEmpty ? currentRoomKey : originalRoomKey)
         mediaItems.removeAll { $0.id == media.id }
-        if isEditing {
-            modelContext.delete(media)
+
+        // 未保存的新增媒体（文件已写盘但尚未关联房源）：立即清理文件，避免残留孤儿文件
+        if media.house == nil {
+            MediaStore.delete(fileName: media.fileName, roomKey: originalRoomKey.isEmpty ? currentRoomKey : originalRoomKey)
         }
+        // 已有记录：这里只从暂存数组移除，不删文件、不删数据库记录
+        // 点「保存」时才真正删除；点「取消」则完整回滚（需求：取消后删除不能生效）
     }
 
     private func loadPhotos(from items: [PhotosPickerItem]) async {
