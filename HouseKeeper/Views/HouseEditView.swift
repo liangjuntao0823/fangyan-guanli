@@ -279,10 +279,25 @@ struct HouseEditView: View {
         defer { loadingMedia = false }
 
         for item in items {
-            // PhotosUI 的 Movie 类型是选择视频的标准可靠方式（直接提供临时文件 URL）
-            if let movie = try? await item.loadTransferable(type: PhotosUI.Movie.self) {
-                let fileName = MediaStore.saveFile(from: movie.url, roomKey: currentRoomKey)
-                mediaItems.append(MediaItem(fileName: fileName, kind: "video"))
+            var savedName: String?
+
+            // 方式一：URL（安全作用域访问后拷贝临时文件）
+            if let url = try? await item.loadTransferable(type: URL.self) {
+                let didStart = url.startAccessingSecurityScopedResource()
+                defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+                if FileManager.default.fileExists(atPath: url.path) {
+                    savedName = MediaStore.saveFile(from: url, roomKey: currentRoomKey)
+                }
+            }
+
+            // 方式二：直接读数据（URL 方式拿不到时兜底）
+            if savedName == nil,
+               let data = try? await item.loadTransferable(type: Data.self) {
+                savedName = MediaStore.save(data: data, ext: "mov", roomKey: currentRoomKey)
+            }
+
+            if let savedName {
+                mediaItems.append(MediaItem(fileName: savedName, kind: "video"))
             }
         }
         selectedVideos = []
