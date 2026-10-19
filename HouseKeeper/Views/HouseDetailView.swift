@@ -80,14 +80,27 @@ struct HouseDetailView: View {
                 Spacer()
                 if house.hasPhoto || house.hasVideo {
                     if isSelecting {
-                        Button("取消") { exitSelecting() }
-                            .font(.subheadline)
+                        // 多选模式下：取消按钮（可点击区域更大）
+                        Button {
+                            exitSelecting()
+                        } label: {
+                            Label("取消", systemImage: "xmark")
+                                .font(.subheadline.weight(.medium))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                        }
+                        .buttonStyle(.bordered)
                     } else {
-                        Text(house.hasPhoto ? "有实拍图" : "无实拍图")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                        Button("多选") { isSelecting = true }
-                            .font(.subheadline)
+                        // 多选入口：按钮状、放大，方便点击
+                        Button {
+                            isSelecting = true
+                        } label: {
+                            Label("多选", systemImage: "checkmark.circle")
+                                .font(.subheadline.weight(.medium))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                        }
+                        .buttonStyle(.bordered)
                     }
                 }
             }
