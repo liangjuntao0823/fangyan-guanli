@@ -237,9 +237,10 @@ struct HouseEditView: View {
         defer { loadingMedia = false }
 
         for item in items {
-            if let image = try? await item.loadTransferable(type: UIImage.self),
-               let data = image.jpegData(compressionQuality: 0.85) {
-                let fileName = MediaStore.save(data: data, ext: "jpg")
+            if let data = try? await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data),
+               let jpeg = image.jpegData(compressionQuality: 0.85) {
+                let fileName = MediaStore.save(data: jpeg, ext: "jpg")
                 mediaItems.append(MediaItem(fileName: fileName, kind: "image"))
             }
         }

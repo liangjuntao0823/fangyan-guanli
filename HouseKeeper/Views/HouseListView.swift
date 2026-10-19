@@ -227,5 +227,5 @@ struct HouseListView: View {
 
 #Preview {
     HouseListView()
-        .modelContainer(for: House.self, MediaItem.self, inMemory: true)
+        .modelContainer(for: [House.self, MediaItem.self], inMemory: true)
 }

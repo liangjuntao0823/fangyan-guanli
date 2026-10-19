@@ -122,6 +122,7 @@ extension House {
 // MARK: - 首次启动示例数据（可直接删除）
 
 enum SampleData {
+    @MainActor
     static func seedIfNeeded(_ container: ModelContainer) {
         let context = container.mainContext
         let existing = (try? context.fetch(FetchDescriptor<House>())) ?? []
