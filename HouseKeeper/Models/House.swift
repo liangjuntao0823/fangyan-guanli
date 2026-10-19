@@ -89,6 +89,13 @@ extension House {
         tower == 2 ? "2-\(roomNo)" : roomNo
     }
 
+    /// 媒体存储目录名（按房号，去除文件系统非法字符）
+    var mediaRoomKey: String {
+        let raw = tower == 2 ? "2-\(roomNo)" : roomNo
+        let illegal = CharacterSet(charactersIn: "/:\\?%*|\"<>")
+        return raw.components(separatedBy: illegal).joined(separator: "-")
+    }
+
     var priceText: String { "\(price)元/月" }
 
     var hasPhoto: Bool { mediaItems.contains { $0.kind == "image" } }

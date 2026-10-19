@@ -39,6 +39,7 @@ struct StatusBadge: View {
 
 struct MediaThumbView: View {
     let media: MediaItem
+    let roomKey: String
 
     var body: some View {
         if media.kind == "video" {
@@ -56,7 +57,7 @@ struct MediaThumbView: View {
 
     private var thumbImage: some View {
         Group {
-            if let image = UIImage(contentsOfFile: MediaStore.url(for: media.fileName).path) {
+            if let image = UIImage(contentsOfFile: MediaStore.url(for: media.fileName, roomKey: roomKey).path) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -130,7 +131,7 @@ struct HouseCardView: View {
     private var coverView: some View {
         Group {
             if let first = house.photos.first,
-               let image = UIImage(contentsOfFile: MediaStore.url(for: first.fileName).path) {
+               let image = UIImage(contentsOfFile: MediaStore.url(for: first.fileName, roomKey: house.mediaRoomKey).path) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()

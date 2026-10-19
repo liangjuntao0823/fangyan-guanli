@@ -27,6 +27,8 @@ struct HouseEditView: View {
 
     /// 用户是否手动改过座号（改过后不再被房号前缀自动覆盖）
     @State private var towerTouched = false
+    /// 编辑前原房号目录 key（房号变更时迁移媒体目录）
+    @State private var originalRoomKey = ""
 
     private var isEditing: Bool { house != nil }
 
@@ -111,8 +113,12 @@ struct HouseEditView: View {
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
                                 ForEach(mediaItems) { media in
                                     ZStack(alignment: .topTrailing) {
-                                        MediaThumbView(media: media)
-                                            .aspectRatio(1, contentMode: .fill)
+                                        // 固定正方形格子，内容缩放裁切填满，横屏照片不重叠
+                                        Color.clear
+                                            .aspectRatio(1, contentMode: .fit)
+                                            .overlay(
+                                                MediaThumbView(media: media, roomKey: originalRoomKey.isEmpty ? currentRoomKey : originalRoomKey)
+                                            )
                                             .clipShape(RoundedRectangle(cornerRadius: 8))
 
                                         Button {
@@ -170,6 +176,16 @@ struct HouseEditView: View {
 
     // MARK: - 载入 / 保存
 
+    /// 当前房号对应的媒体目录 key（新增时用临时 key，保存后正式按房号）
+    private var currentRoomKey: String {
+        let trimmed = roomNo.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "2－", with: "2-")
+        let clean = trimmed.hasPrefix("2-") ? String(trimmed.dropFirst(2)) : trimmed
+        let key = tower == 2 ? "2-\(clean)" : clean
+        let illegal = CharacterSet(charactersIn: "/:\\?%*|\"<>")
+        return key.components(separatedBy: illegal).joined(separator: "-")
+    }
+
     private func loadFromHouse() {
         guard let house else { return }
         roomNo = house.roomNo
@@ -182,6 +198,7 @@ struct HouseEditView: View {
         status = house.status
         mediaItems = house.mediaItems
         towerTouched = true
+        originalRoomKey = house.mediaRoomKey
     }
 
     private func save() {
@@ -201,6 +218,16 @@ struct HouseEditView: View {
         } else {
             target = House()
             modelContext.insert(target)
+        }
+
+        // 编辑时房号变更 → 媒体目录整体迁移，文件不丢失
+        if isEditing, let house {
+            let newRoomKey: String = {
+                let key = house.tower == 2 ? "2-\(cleanRoomNo)" : cleanRoomNo
+                let illegal = CharacterSet(charactersIn: "/:\\?%*|\"<>")
+                return key.components(separatedBy: illegal).joined(separator: "-")
+            }()
+            MediaStore.migrateHouseDirectory(from: originalRoomKey, to: newRoomKey)
         }
 
         target.roomNo = cleanRoomNo
@@ -225,7 +252,7 @@ struct HouseEditView: View {
     // MARK: - 媒体处理
 
     private func removeMedia(_ media: MediaItem) {
-        MediaStore.delete(fileName: media.fileName)
+        MediaStore.delete(fileName: media.fileName, roomKey: originalRoomKey.isEmpty ? currentRoomKey : originalRoomKey)
         mediaItems.removeAll { $0.id == media.id }
         if isEditing {
             modelContext.delete(media)
@@ -240,7 +267,7 @@ struct HouseEditView: View {
             if let data = try? await item.loadTransferable(type: Data.self),
                let image = UIImage(data: data),
                let jpeg = image.jpegData(compressionQuality: 0.85) {
-                let fileName = MediaStore.save(data: jpeg, ext: "jpg")
+                let fileName = MediaStore.save(data: jpeg, ext: "jpg", roomKey: currentRoomKey)
                 mediaItems.append(MediaItem(fileName: fileName, kind: "image"))
             }
         }
@@ -252,8 +279,9 @@ struct HouseEditView: View {
         defer { loadingMedia = false }
 
         for item in items {
-            if let url = try? await item.loadTransferable(type: URL.self) {
-                let fileName = MediaStore.saveFile(from: url)
+            // PhotosUI 的 Movie 类型是选择视频的标准可靠方式（直接提供临时文件 URL）
+            if let movie = try? await item.loadTransferable(type: Movie.self) {
+                let fileName = MediaStore.saveFile(from: movie.url, roomKey: currentRoomKey)
                 mediaItems.append(MediaItem(fileName: fileName, kind: "video"))
             }
         }

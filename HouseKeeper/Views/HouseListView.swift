@@ -49,6 +49,7 @@ struct HouseListView: View {
                 }
             }
             .navigationTitle("房源管家")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {

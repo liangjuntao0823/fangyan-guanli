@@ -56,7 +56,7 @@ struct HouseDetailView: View {
             Text("将同时删除该房源的照片和视频，且无法恢复。")
         }
         .fullScreenCover(item: $previewRoute) { route in
-            PhotoPreviewView(photos: house.photos, startIndex: route.index)
+            PhotoPreviewView(photos: house.photos, startIndex: route.index, roomKey: house.mediaRoomKey)
         }
         .onAppear { prepareShareItems() }
     }
@@ -97,9 +97,14 @@ struct HouseDetailView: View {
                 if !house.photos.isEmpty {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
                         ForEach(Array(house.photos.enumerated()), id: \.element.id) { index, media in
-                            MediaThumbView(media: media)
-                                .aspectRatio(1, contentMode: .fill)
+                            // 固定正方形格子，内容缩放裁切填满，横屏照片也不会溢出重叠
+                            Color.clear
+                                .aspectRatio(1, contentMode: .fit)
+                                .overlay(
+                                    MediaThumbView(media: media, roomKey: house.mediaRoomKey)
+                                )
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .contentShape(RoundedRectangle(cornerRadius: 8))
                                 .onTapGesture {
                                     previewRoute = PhotoPreviewRoute(index: index)
                                 }
@@ -109,7 +114,7 @@ struct HouseDetailView: View {
 
                 if !house.videos.isEmpty {
                     ForEach(house.videos) { media in
-                        HouseVideoPlayer(media: media)
+                        HouseVideoPlayer(media: media, roomKey: house.mediaRoomKey)
                             .frame(height: 200)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
@@ -219,7 +224,7 @@ struct HouseDetailView: View {
     }
 
     private func deleteHouse() {
-        MediaStore.deleteAll(files: house.mediaItems.map(\.fileName))
+        MediaStore.deleteAll(files: house.mediaItems.map(\.fileName), roomKey: house.mediaRoomKey)
         modelContext.delete(house)
         try? modelContext.save()
         dismiss()
@@ -229,10 +234,10 @@ struct HouseDetailView: View {
     private func prepareShareItems() {
         var items: [Any] = [house.fullShareText]
         items += house.photos.compactMap { media in
-            UIImage(contentsOfFile: MediaStore.url(for: media.fileName).path)
+            UIImage(contentsOfFile: MediaStore.url(for: media.fileName, roomKey: house.mediaRoomKey).path)
         }
         items += house.videos.map { media in
-            MediaStore.url(for: media.fileName)
+            MediaStore.url(for: media.fileName, roomKey: house.mediaRoomKey)
         }
         shareItems = items
     }
@@ -249,13 +254,14 @@ struct PhotoPreviewRoute: Identifiable {
 
 struct HouseVideoPlayer: View {
     let media: MediaItem
+    let roomKey: String
     @State private var player: AVPlayer?
 
     var body: some View {
         VideoPlayer(player: player)
             .onAppear {
                 if player == nil {
-                    player = AVPlayer(url: MediaStore.url(for: media.fileName))
+                    player = AVPlayer(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
                 }
             }
             .onDisappear {
@@ -270,12 +276,14 @@ struct HouseVideoPlayer: View {
 struct PhotoPreviewView: View {
     let photos: [MediaItem]
     let startIndex: Int
+    let roomKey: String
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
 
-    init(photos: [MediaItem], startIndex: Int) {
+    init(photos: [MediaItem], startIndex: Int, roomKey: String) {
         self.photos = photos
         self.startIndex = startIndex
+        self.roomKey = roomKey
         _currentIndex = State(initialValue: startIndex)
     }
 
@@ -285,7 +293,7 @@ struct PhotoPreviewView: View {
 
             TabView(selection: $currentIndex) {
                 ForEach(Array(photos.enumerated()), id: \.element.id) { index, media in
-                    if let image = UIImage(contentsOfFile: MediaStore.url(for: media.fileName).path) {
+                    if let image = UIImage(contentsOfFile: MediaStore.url(for: media.fileName, roomKey: roomKey).path) {
                         Image(uiImage: image)
                             .resizable()
                             .scaledToFit()
