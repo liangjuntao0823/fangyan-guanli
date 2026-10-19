@@ -1,0 +1,141 @@
+name: Build Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "HouseKeeper/**"
+      - "HouseKeeper.xcodeproj/**"
+      - ".github/workflows/build.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "HouseKeeper/**"
+      - "HouseKeeper.xcodeproj/**"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unsigned-ipa-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_PATH: HouseKeeper.xcodeproj
+  SCHEME: HouseKeeper
+  CONFIGURATION: Release
+  DERIVED_DATA_PATH: ${{ github.workspace }}/DerivedData
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Select Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          XCODE_PATH="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort -V | tail -1)"
+          test -n "$XCODE_PATH"
+          sudo xcode-select --switch "$XCODE_PATH/Contents/Developer"
+          xcodebuild -version
+          swift --version
+      - name: Generate App Icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user pillow -q
+          python3 generate_icon.py
+          test -s HouseKeeper/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+      - name: Verify project and scheme
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$PROJECT_PATH"
+          xcodebuild -project "$PROJECT_PATH" -list
+          xcodebuild -project "$PROJECT_PATH" -scheme "$SCHEME" -showBuildSettings -configuration "$CONFIGURATION" >/dev/null
+      - name: Read build metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          SETTINGS="$(xcodebuild -project "$PROJECT_PATH" -scheme "$SCHEME" -configuration "$CONFIGURATION" -showBuildSettings)"
+          VERSION="$(printf '%s\n' "$SETTINGS" | awk -F ' = ' '/^[[:space:]]*MARKETING_VERSION = / {print $2; exit}')"
+          BUILD="$(printf '%s\n' "$SETTINGS" | awk -F ' = ' '/^[[:space:]]*CURRENT_PROJECT_VERSION = / {print $2; exit}')"
+          PRODUCT_NAME="$(printf '%s\n' "$SETTINGS" | awk -F ' = ' '/^[[:space:]]*WRAPPER_NAME = / {print $2; exit}')"
+          if [[ -z "$PRODUCT_NAME" ]]; then
+            PRODUCT_NAME="$(printf '%s\n' "$SETTINGS" | awk -F ' = ' '/^[[:space:]]*FULL_PRODUCT_NAME = / {print $2; exit}')"
+          fi
+          test -n "$VERSION"
+          test -n "$BUILD"
+          test -n "$PRODUCT_NAME"
+          IPA_NAME="房源管家${VERSION}.ipa"
+          {
+            echo "version=$VERSION"
+            echo "build=$BUILD"
+            echo "product_name=$PRODUCT_NAME"
+            echo "ipa_name=$IPA_NAME"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build for generic iOS device
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$DERIVED_DATA_PATH"
+          xcodebuild \
+            -project "$PROJECT_PATH" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build | tee xcodebuild.log
+      - name: Ad-hoc sign App
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.metadata.outputs.product_name }}
+        run: |
+          set -euo pipefail
+          APP_PATH="$DERIVED_DATA_PATH/Build/Products/${CONFIGURATION}-iphoneos/$PRODUCT_NAME"
+          test -d "$APP_PATH"
+          /usr/bin/codesign --force --sign - --deep "$APP_PATH"
+          /usr/bin/codesign --verify --deep --strict "$APP_PATH"
+      - name: Package unsigned IPA
+        id: package
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.metadata.outputs.product_name }}
+          IPA_NAME: ${{ steps.metadata.outputs.ipa_name }}
+        run: |
+          set -euo pipefail
+          APP_PATH="$DERIVED_DATA_PATH/Build/Products/${CONFIGURATION}-iphoneos/$PRODUCT_NAME"
+          test -d "$APP_PATH"
+          mkdir -p artifacts/Payload
+          ditto "$APP_PATH" "artifacts/Payload/$PRODUCT_NAME"
+          (cd artifacts && /usr/bin/zip -qry "$IPA_NAME" Payload)
+          test -s "artifacts/$IPA_NAME"
+          echo "ipa_path=artifacts/$IPA_NAME" >> "$GITHUB_OUTPUT"
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-ipa-v${{ steps.metadata.outputs.version }}-b${{ steps.metadata.outputs.build }}
+          path: ${{ steps.package.outputs.ipa_path }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log-${{ github.run_number }}
+          path: xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 14
