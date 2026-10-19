@@ -171,13 +171,13 @@ struct HouseDetailView: View {
                     Button {
                         saveSelectedToAlbum()
                     } label: {
-                        Label(selectedMediaIDs.isEmpty ? "请选择要保存的照片或视频" : "保存到相册（\(selectedMediaIDs.count)）", systemImage: "square.and.arrow.down")
+                        Label(selectedMediaNames.isEmpty ? "请选择要保存的照片或视频" : "保存到相册（\(selectedMediaNames.count)）", systemImage: "square.and.arrow.down")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(AppTheme.primary)
-                    .disabled(selectedMediaIDs.isEmpty)
+                    .disabled(selectedMediaNames.isEmpty)
                 }
             }
         }
