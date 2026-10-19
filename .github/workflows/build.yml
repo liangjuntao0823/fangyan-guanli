@@ -47,12 +47,10 @@ jobs:
           sudo xcode-select --switch "$XCODE_PATH/Contents/Developer"
           xcodebuild -version
           swift --version
-      - name: Generate App Icon
+      - name: Verify App Icon
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m pip install --user pillow -q
-          python3 generate_icon.py
           test -s HouseKeeper/Assets.xcassets/AppIcon.appiconset/AppIcon.png
       - name: Verify project and scheme
         shell: bash
