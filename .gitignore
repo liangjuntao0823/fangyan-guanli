@@ -1,0 +1,13 @@
+# Xcode
+DerivedData/
+build/
+*.xcodeproj/*.xcuserstate
+xcuserdata/
+*.ipa
+xcodebuild.log
+
+# macOS
+.DS_Store
+
+# 临时校验文件
+pbx_check.json
