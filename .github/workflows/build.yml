@@ -18,7 +18,7 @@ on:
       - ".github/workflows/build.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: unsigned-ipa-${{ github.workflow }}-${{ github.ref }}
@@ -123,12 +123,29 @@ jobs:
           echo "ipa_path=artifacts/$IPA_NAME" >> "$GITHUB_OUTPUT"
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: unsigned-ipa-v${{ steps.metadata.outputs.version }}-b${{ steps.metadata.outputs.build }}
           path: ${{ steps.package.outputs.ipa_path }}
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+      - name: Publish IPA to Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IPA_PATH: ${{ steps.package.outputs.ipa_path }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+          BUILD: ${{ steps.metadata.outputs.build }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" || true
+          gh release create "$TAG" "$IPA_PATH" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "房源管家 ${VERSION} (build ${BUILD})" \
+            --notes "免签名 IPA（ad-hoc），巨魔商店 / 爱思助手可安装" \
+            --prerelease
       - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
