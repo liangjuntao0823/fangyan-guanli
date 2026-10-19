@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AVKit
+import Photos
 
 // MARK: - 主题色（沿用网页版配色方向：深墨蓝 + 暖白 + 琥珀）
 
@@ -36,6 +37,44 @@ struct StatusBadge: View {
     }
 }
 
+// MARK: - 视频首帧缩略图（异步提取第一帧，避免灰色占位）
+
+struct VideoThumbnailView: View {
+    let url: URL
+    @State private var thumbnail: UIImage?
+
+    var body: some View {
+        Group {
+            if let thumbnail {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ZStack {
+                    Color.gray.opacity(0.2)
+                    ProgressView()
+                }
+            }
+        }
+        .onAppear(perform: loadFirstFrame)
+    }
+
+    private func loadFirstFrame() {
+        guard thumbnail == nil else { return }
+        let asset = AVAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 640, height: 640)
+        let time = CMTime(seconds: 0.1, preferredTimescale: 600)
+        generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, _, _ in
+            guard let cgImage else { return }
+            DispatchQueue.main.async {
+                thumbnail = UIImage(cgImage: cgImage)
+            }
+        }
+    }
+}
+
 // MARK: - 媒体缩略图
 
 struct MediaThumbView: View {
@@ -45,7 +84,7 @@ struct MediaThumbView: View {
     var body: some View {
         if media.kind == "video" {
             ZStack {
-                thumbImage
+                VideoThumbnailView(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 30))
                     .foregroundColor(.white)
@@ -178,13 +217,14 @@ struct HouseCardView: View {
     }
 }
 
-// MARK: - 全屏视频播放器（卡片点封面播放用）
+// MARK: - 全屏视频播放器（卡片点封面播放用，长按保存视频到相册）
 
 struct FullScreenVideoPlayer: View {
     let media: MediaItem
     let roomKey: String
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
+    @State private var saveMessage: String?
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -192,6 +232,14 @@ struct FullScreenVideoPlayer: View {
 
             if let player {
                 VideoPlayer(player: player)
+                    // 长按播放界面：保存视频到相册
+                    .contextMenu {
+                        Button {
+                            saveVideoToAlbum()
+                        } label: {
+                            Label("保存到相册", systemImage: "square.and.arrow.down")
+                        }
+                    }
             }
 
             Button {
@@ -204,6 +252,14 @@ struct FullScreenVideoPlayer: View {
             }
         }
         .statusBarHidden()
+        .alert("保存到相册", isPresented: Binding(
+            get: { saveMessage != nil },
+            set: { if !$0 { saveMessage = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(saveMessage ?? "")
+        }
         .onAppear {
             if player == nil {
                 player = AVPlayer(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
@@ -213,6 +269,33 @@ struct FullScreenVideoPlayer: View {
         .onDisappear {
             player?.pause()
             player = nil
+        }
+    }
+
+    /// 保存当前视频到系统相册（仅新增写入权限）
+    private func saveVideoToAlbum() {
+        let url = MediaStore.url(for: media.fileName, roomKey: roomKey)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            saveMessage = "视频文件不存在，无法保存"
+            return
+        }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            switch status {
+            case .authorized, .limited:
+                PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+                } completionHandler: { success, error in
+                    DispatchQueue.main.async {
+                        saveMessage = success
+                            ? "已保存到相册"
+                            : "保存失败：\(error?.localizedDescription ?? "未知错误")"
+                    }
+                }
+            default:
+                DispatchQueue.main.async {
+                    saveMessage = "没有相册写入权限，请在 设置 → 隐私与安全 → 照片 中允许"
+                }
+            }
         }
     }
 }

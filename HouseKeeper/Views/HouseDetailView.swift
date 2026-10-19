@@ -15,6 +15,9 @@ struct HouseDetailView: View {
     @State private var showStatusConfirm = false
     @State private var previewRoute: PhotoPreviewRoute? = nil
     @State private var shareItems: [Any] = []
+    @State private var isSelecting = false          // 多选模式
+    @State private var selectedMediaIDs = Set<UUID>()
+    @State private var saveTip: String?
 
     var body: some View {
         ScrollView {
@@ -76,9 +79,16 @@ struct HouseDetailView: View {
                 }
                 Spacer()
                 if house.hasPhoto || house.hasVideo {
-                    Text(house.hasPhoto ? "有实拍图" : "无实拍图")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
+                    if isSelecting {
+                        Button("取消") { exitSelecting() }
+                            .font(.subheadline)
+                    } else {
+                        Text(house.hasPhoto ? "有实拍图" : "无实拍图")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                        Button("多选") { isSelecting = true }
+                            .font(.subheadline)
+                    }
                 }
             }
 
@@ -106,8 +116,21 @@ struct HouseDetailView: View {
                                 )
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
                                 .contentShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(alignment: .topLeading) {
+                                    if isSelecting {
+                                        Image(systemName: selectedMediaIDs.contains(media.id) ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 20))
+                                            .foregroundColor(.white)
+                                            .shadow(radius: 2)
+                                            .padding(5)
+                                    }
+                                }
                                 .onTapGesture {
-                                    previewRoute = PhotoPreviewRoute(index: index)
+                                    if isSelecting {
+                                        toggleSelect(media)
+                                    } else {
+                                        previewRoute = PhotoPreviewRoute(index: index)
+                                    }
                                 }
                         }
                     }
@@ -115,16 +138,110 @@ struct HouseDetailView: View {
 
                 if !house.videos.isEmpty {
                     ForEach(house.videos) { media in
-                        HouseVideoPlayer(media: media, roomKey: house.mediaRoomKey)
-                            .frame(height: 200)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        if isSelecting {
+                            // 多选模式下视频显示为缩略图，点击选中
+                            Color.clear
+                                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                                .overlay(
+                                    MediaThumbView(media: media, roomKey: house.mediaRoomKey)
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                .contentShape(RoundedRectangle(cornerRadius: 12))
+                                .overlay(alignment: .topLeading) {
+                                    Image(systemName: selectedMediaIDs.contains(media.id) ? "checkmark.circle.fill" : "circle")
+                                        .font(.system(size: 20))
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 2)
+                                        .padding(5)
+                                }
+                                .onTapGesture {
+                                    toggleSelect(media)
+                                }
+                        } else {
+                            HouseVideoPlayer(media: media, roomKey: house.mediaRoomKey)
+                                .frame(height: 200)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
                     }
+                }
+
+                // 多选模式：底部保存按钮
+                if isSelecting {
+                    Button {
+                        saveSelectedToAlbum()
+                    } label: {
+                        Label(selectedMediaIDs.isEmpty ? "请选择要保存的照片或视频" : "保存到相册（\(selectedMediaIDs.count)）", systemImage: "square.and.arrow.down")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AppTheme.primary)
+                    .disabled(selectedMediaIDs.isEmpty)
                 }
             }
         }
         .padding(14)
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 14))
+        .alert("保存到相册", isPresented: Binding(
+            get: { saveTip != nil },
+            set: { if !$0 { saveTip = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(saveTip ?? "")
+        }
+    }
+
+    // MARK: - 多选 / 保存到相册
+
+    private func toggleSelect(_ media: MediaItem) {
+        if selectedMediaIDs.contains(media.id) {
+            selectedMediaIDs.remove(media.id)
+        } else {
+            selectedMediaIDs.insert(media.id)
+        }
+    }
+
+    private func exitSelecting() {
+        isSelecting = false
+        selectedMediaIDs.removeAll()
+    }
+
+    private func saveSelectedToAlbum() {
+        let selected = house.mediaItems.filter { selectedMediaIDs.contains($0.id) }
+        guard !selected.isEmpty else { return }
+
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            switch status {
+            case .authorized, .limited:
+                PHPhotoLibrary.shared().performChanges {
+                    for media in selected {
+                        let url = MediaStore.url(for: media.fileName, roomKey: house.mediaRoomKey)
+                        if media.kind == "image",
+                           let image = UIImage(contentsOfFile: url.path) {
+                            PHAssetChangeRequest.creationRequestForAsset(from: image)
+                        } else if media.kind == "video",
+                                  FileManager.default.fileExists(atPath: url.path) {
+                            PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+                        }
+                    }
+                } completionHandler: { success, error in
+                    DispatchQueue.main.async {
+                        if success {
+                            saveTip = "已保存 \(selected.count) 个到相册"
+                            exitSelecting()
+                        } else {
+                            saveTip = "保存失败：\(error?.localizedDescription ?? "未知错误")"
+                        }
+                    }
+                }
+            default:
+                DispatchQueue.main.async {
+                    saveTip = "没有相册写入权限，请在 设置 → 隐私与安全 → 照片 中允许"
+                }
+            }
+        }
     }
 
     // MARK: - 房源信息
@@ -177,7 +294,7 @@ struct HouseDetailView: View {
     // MARK: - 操作区
 
     private var actionCard: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             Button {
                 showStatusConfirm = true
             } label: {
@@ -187,7 +304,7 @@ struct HouseDetailView: View {
                     Image(systemName: house.status == .available ? "checkmark.circle" : "arrow.uturn.backward.circle")
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+                .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
             .tint(house.status == .available ? Color(red: 0.24, green: 0.58, blue: 0.34) : Color(red: 0.47, green: 0.49, blue: 0.55))
@@ -196,9 +313,9 @@ struct HouseDetailView: View {
                 prepareShareItems()
                 showShare = true
             } label: {
-                Label("分享到微信", systemImage: "square.and.arrow.up")
+                Label("分享", systemImage: "square.and.arrow.up")
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 8)
             }
             .buttonStyle(.bordered)
 
@@ -207,7 +324,7 @@ struct HouseDetailView: View {
             } label: {
                 Label("删除房源", systemImage: "trash")
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 8)
             }
             .buttonStyle(.bordered)
         }
@@ -251,15 +368,24 @@ struct PhotoPreviewRoute: Identifiable {
     let index: Int
 }
 
-// MARK: - 视频播放器（持有 player，避免视图重建时频繁创建）
+// MARK: - 视频播放器（持有 player，避免视图重建时频繁创建；长按可保存视频到相册）
 
 struct HouseVideoPlayer: View {
     let media: MediaItem
     let roomKey: String
     @State private var player: AVPlayer?
+    @State private var saveMessage: String?
 
     var body: some View {
         VideoPlayer(player: player)
+            // 长按播放界面：保存视频到相册（和微信一致）
+            .contextMenu {
+                Button {
+                    saveVideoToAlbum()
+                } label: {
+                    Label("保存到相册", systemImage: "square.and.arrow.down")
+                }
+            }
             .onAppear {
                 if player == nil {
                     player = AVPlayer(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
@@ -269,6 +395,41 @@ struct HouseVideoPlayer: View {
                 player?.pause()
                 player = nil
             }
+            .alert("保存到相册", isPresented: Binding(
+                get: { saveMessage != nil },
+                set: { if !$0 { saveMessage = nil } }
+            )) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(saveMessage ?? "")
+            }
+    }
+
+    /// 保存当前视频到系统相册（仅新增写入权限）
+    private func saveVideoToAlbum() {
+        let url = MediaStore.url(for: media.fileName, roomKey: roomKey)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            saveMessage = "视频文件不存在，无法保存"
+            return
+        }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            switch status {
+            case .authorized, .limited:
+                PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+                } completionHandler: { success, error in
+                    DispatchQueue.main.async {
+                        saveMessage = success
+                            ? "已保存到相册"
+                            : "保存失败：\(error?.localizedDescription ?? "未知错误")"
+                    }
+                }
+            default:
+                DispatchQueue.main.async {
+                    saveMessage = "没有相册写入权限，请在 设置 → 隐私与安全 → 照片 中允许"
+                }
+            }
+        }
     }
 }
 

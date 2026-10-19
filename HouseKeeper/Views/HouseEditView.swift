@@ -36,16 +36,21 @@ struct HouseEditView: View {
         NavigationStack {
             Form {
                 Section("基本信息") {
-                    TextField("房号（如 2334 或 2-1418）", text: $roomNo)
-                        .keyboardType(.numbersAndPunctuation)
-                        .onChange(of: roomNo) { _, newValue in
-                            guard !towerTouched else { return }
-                            if newValue.hasPrefix("2-") || newValue.hasPrefix("2－") {
-                                tower = 2
-                            } else if !newValue.isEmpty {
-                                tower = 1
+                    HStack {
+                        Text("房号")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("如 2334 或 2-1418", text: $roomNo)
+                            .keyboardType(.numbersAndPunctuation)
+                            .onChange(of: roomNo) { _, newValue in
+                                guard !towerTouched else { return }
+                                if newValue.hasPrefix("2-") || newValue.hasPrefix("2－") {
+                                    tower = 2
+                                } else if !newValue.isEmpty {
+                                    tower = 1
+                                }
                             }
-                        }
+                    }
 
                     Picker("座号", selection: $tower) {
                         Text("1座").tag(1)
@@ -55,12 +60,25 @@ struct HouseEditView: View {
                         towerTouched = true
                     }
 
-                    TextField("房东", text: $landlord)
-
-                    TextField("户型（如 单间 / 复式）", text: $layout)
+                    HStack {
+                        Text("房东")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("房东姓名", text: $landlord)
+                    }
 
                     HStack {
-                        TextField("价格（元/月）", text: $priceText)
+                        Text("户型")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("如 单间 / 复式", text: $layout)
+                    }
+
+                    HStack {
+                        Text("价格")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("元/月", text: $priceText)
                             .keyboardType(.numberPad)
                         Spacer()
                         if !priceText.isEmpty {
@@ -70,7 +88,12 @@ struct HouseEditView: View {
                         }
                     }
 
-                    TextField("密码", text: $password)
+                    HStack {
+                        Text("密码")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("进门密码", text: $password)
+                    }
                 }
 
                 Section("状态") {
@@ -111,7 +134,7 @@ struct HouseEditView: View {
                                 .foregroundColor(.secondary)
                         } else {
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-                                ForEach(mediaItems) { media in
+                                ForEach(Array(mediaItems.enumerated()), id: \.element.id) { _, media in
                                     ZStack(alignment: .topTrailing) {
                                         // 固定正方形格子，内容缩放裁切填满，横屏照片不重叠
                                         Color.clear
@@ -122,6 +145,7 @@ struct HouseEditView: View {
                                             .clipShape(RoundedRectangle(cornerRadius: 8))
 
                                         Button {
+                                            // 单条删除：只移除这一条，其余不受影响（取消可完整回滚）
                                             removeMedia(media)
                                         } label: {
                                             Image(systemName: "xmark.circle.fill")
@@ -142,8 +166,13 @@ struct HouseEditView: View {
                 }
 
                 Section("备注") {
-                    TextField("备注（如 采光好 / 带阳台 / 近电梯）", text: $remark, axis: .vertical)
-                        .lineLimit(1...4)
+                    HStack(alignment: .top) {
+                        Text("备注")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("如 采光好 / 带阳台 / 近电梯", text: $remark, axis: .vertical)
+                            .lineLimit(1...4)
+                    }
                 }
             }
             .navigationTitle(isEditing ? "编辑房源" : "登记房源")
