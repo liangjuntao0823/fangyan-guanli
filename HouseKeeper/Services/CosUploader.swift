@@ -271,9 +271,10 @@ enum CosUploader {
     }
 
     /// COS V5 签名：q-sign-algorithm=sha1;q-ak=...;q-sign-time=...;q-key-time=...;q-header-list=...;q-url-param-list=...;q-signature=...
-    /// 关键（严格按 COS 官方规范）：
-    /// 1. HttpString = HttpMethod\nUriPathname\nHttpParameters\nHttpHeaders\n —— 恰好 3 个换行分隔 4 段，末尾再一个换行；多一个换行会令 COS 校验不一致（SignatureDoesNotMatch）
-    /// 2. UriPathname 使用与请求 URL 相同的百分号编码（中文房号目录会被编码）
+    /// 关键（严格按 COS 官方规范文档 436/7778 及官方 Python SDK cos_auth.py）：
+    /// 1. HttpString = HttpMethod\nUriPathname\nHttpParameters\nHttpHeaders\n —— 恰好 3 个换行分隔 4 段，末尾再一个换行（参数为空时是两个连续换行）
+    /// 2. 【根因修复】UriPathname 必须用【未编码】的原样路径参与签名（服务端会用解码后的请求路径重算校验）；
+    ///    实际请求 URL 的 path 才做百分号编码。v1.12 曾误把编码路径用于签名 → SignatureDoesNotMatch（本次修复）
     /// 3. HttpHeaders 的 key 小写、value 按 RFC3986 编码、按字典序拼接
     /// 4. q-header-list 用分号分隔参与签名的 header key
     private static func presignedURL(for path: String, method: String, expires: Int, headers: [(String, String)], config: CosConfig) throws -> URL {
@@ -283,7 +284,7 @@ enum CosUploader {
 
         let hostValue = host(for: config)
         let rawPath = "/" + path
-        // 路径百分号编码（保留 /），签名与请求 URL 必须一致
+        // 请求 URL 的路径做百分号编码（保留 /），中文房号目录会被编码
         let encodedPath = rawPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? rawPath
 
         // 组装签名 headers：key 小写、value RFC3986 编码，排序后拼接
@@ -294,8 +295,9 @@ enum CosUploader {
         let headerValue = pairs.map { "\($0.key)=\($0.value)" }.joined(separator: "&")
 
         let signKey = HMAC_SHA1(key: config.secretKey, message: keyTime)
-        // HttpString 段结构：method\npath\n参数\n请求头\n（参数为空时是两个连续换行）
-        let httpString = "\(method.lowercased())\n\(encodedPath)\n\n\(headerValue)\n"
+        // HttpString 段结构：method\n路径\n参数\n请求头\n（参数为空时是两个连续换行）
+        // 路径必须用未编码的 rawPath 参与签名（官方规范），请求 URL 才用 encodedPath
+        let httpString = "\(method.lowercased())\n\(rawPath)\n\n\(headerValue)\n"
         let sha1Http = SHA1(hexString: httpString)
         let stringToSign = "sha1\n\(signTime)\n\(sha1Http)\n"
         let signature = HMAC_SHA1(key: signKey, message: stringToSign)
