@@ -16,16 +16,21 @@ enum KeychainKey {
 enum KeychainStore {
     private static let service = "com.zfgj.housekeeper"
 
-    static func save(_ value: String, for key: String) {
+    /// v1.20：返回写入结果（true=成功）。此前写入失败被静默吞掉，用户以为保存成功实际没写入。
+    /// kSecAttrAccessibleAfterFirstUnlock 提高开机解锁前访问的可靠性
+    @discardableResult
+    static func save(_ value: String, for key: String) -> Bool {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
-            kSecValueData as String: data
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
         SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        return status == errSecSuccess || status == errSecDuplicateItem
     }
 
     static func load(_ key: String) -> String? {
@@ -50,7 +55,7 @@ struct CosConfig {
     let region: String
     let secretId: String
     let secretKey: String
-    let customDomain: String   // v1.19：自定义域名（如 share.fangyuan88.top），空 = 用默认域名
+    let customDomain: String   // v1.19：自定义域名（如 share.fangyuan88.site），空 = 用默认域名
 
     var isValid: Bool {
         !bucket.isEmpty && !region.isEmpty && !secretId.isEmpty && !secretKey.isEmpty
@@ -79,15 +84,18 @@ enum CosUploader {
     enum CosError: LocalizedError {
         case invalidConfig
         case missingMedia
+        case customDomainMissing      // v1.20：未填自定义域名，微信无法渲染卡片
         case uploadFailed(String)
         case responseInvalid
 
         var errorDescription: String? {
             switch self {
             case .invalidConfig:
-                return "云存储配置不完整，请先在设置页填写"
+                return "云存储配置不完整，请先在设置页填写并保存验证"
             case .missingMedia:
                 return "这套房源还没有照片或视频，先编辑添加素材再分享"
+            case .customDomainMissing:
+                return "未填写自定义域名，分享链接会被微信识别成文件而不是卡片。请到设置页把 share.fangyuan88.site 填入「自定义域名」栏并保存"
             case .uploadFailed(let msg):
                 return "上传失败：" + msg
             case .responseInvalid:
@@ -104,9 +112,13 @@ enum CosUploader {
     ///   微信会把链接识别成文件；绑定自定义域名后微信才按网页抓取生成卡片（换域名自动重生成链接）；
     ///   ②og:image 改用【压缩封面】cover（最长边 400px），微信秒抓不卡顿；
     ///   ③分享链接追加【版本参数 v】，内容更新后微信按新链接重新抓取，避免旧卡片缓存
+    /// - v1.20：①分享前强制校验自定义域名已填，未填直接明确报错（不再静默发默认域名链接）；
+    ///   ②host 自动剥离用户误填的 https:// 前缀与尾部斜杠
     /// 入参全部为值类型（ShareMediaFile / ShareHouseInfo），Task 内不触碰 SwiftData 模型，避免跨线程访问闪退
     static func shareCard(mediaFiles: [ShareMediaFile], roomKey: String, info: ShareHouseInfo, config: CosConfig) async throws -> URL {
         guard !mediaFiles.isEmpty else { throw CosError.missingMedia }
+        // v1.20：微信渲染卡片必须走自定义域名；没填就不生成链接，直接告诉用户去哪填
+        guard !config.customDomain.isEmpty else { throw CosError.customDomainMissing }
 
         // 0. 缓存命中：媒体清单、房源信息、COS 配置（含自定义域名）都没变化 → 直接复用上次链接，零上传
         if let cached = ShareCacheStore.load(roomKey: roomKey),
@@ -197,6 +209,32 @@ enum CosUploader {
         ))
 
         return versionedURL
+    }
+
+    /// v1.20：连接自检（设置页「保存并验证」调用）。
+    /// ①用当前配置上传一个测试文件到桶 → 验证桶名/地域/密钥/签名；
+    /// ②再用访问域名（自定义域名或默认域名）读取该文件 → 验证域名解析 + HTTPS 证书 + 私有桶签名访问。
+    /// 全部通过返回实际使用的访问域名；任一环节失败抛出带具体错误码的详细信息。
+    static func verifyConnection(config: CosConfig) async throws -> String {
+        let testPath = "h/_verify/connect.txt"
+        let testData = Data("connect-ok-\(Int(Date().timeIntervalSince1970))".utf8)
+
+        // 1. 上传测试对象：失败 = 桶名/地域/密钥/签名有误（错误信息里带 COS 错误码）
+        try await upload(data: testData, to: testPath, contentType: "text/plain", config: config)
+
+        // 2. 用访问域名读取测试对象：失败 = 自定义域名未绑定/未生效/证书异常（HTTP 错误或证书错误）
+        let getURL = try presignedGetURL(for: testPath, expires: 120, config: config)
+        var request = URLRequest(url: getURL)
+        request.httpMethod = "GET"
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw CosError.uploadFailed("网络响应无效")
+        }
+        guard (200...299).contains(http.statusCode), String(data: data, encoding: .utf8)?.hasPrefix("connect-ok") == true else {
+            let detail = extractCosError(from: data)
+            throw CosError.uploadFailed("读取测试文件失败 HTTP \(http.statusCode)（" + (detail.isEmpty ? "请确认自定义域名已在存储桶「域名与传输管理」绑定并生效（状态为上线/已解析）" : detail) + "）")
+        }
+        return host(for: config)
     }
 
     // MARK: - HTML 模板
@@ -312,9 +350,18 @@ enum CosUploader {
 
     /// v1.19：配置了自定义域名就用它（Host 与签名都指向自定义域名，微信按网页抓取）；
     /// 未配置时回退 COS 默认域名（2024 年后新建桶默认域名强制下载，微信会识别成文件——仅作兜底）
+    /// v1.20：自动剥离用户误填的 https:// / http:// 前缀和尾部斜杠（如 https://share.xxx.top/ → share.xxx.top）
     private static func host(for config: CosConfig) -> String {
-        let domain = config.customDomain.trimmingCharacters(in: .whitespacesAndNewlines)
+        var domain = config.customDomain.trimmingCharacters(in: .whitespacesAndNewlines)
         if !domain.isEmpty {
+            for prefix in ["https://", "http://"] {
+                if domain.lowercased().hasPrefix(prefix) {
+                    domain = String(domain.dropFirst(prefix.count))
+                }
+            }
+            while domain.hasSuffix("/") {
+                domain.removeLast()
+            }
             return domain
         }
         return "\(config.bucket).cos.\(config.region).myqcloud.com"
