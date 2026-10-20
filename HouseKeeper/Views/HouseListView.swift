@@ -5,7 +5,7 @@ struct HouseListView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \House.createdAt, order: .reverse) private var houses: [House]
 
-    @State private var searchText = ""
+    @State private var searchText = \u{22}\u{22}
     @State private var towerFilter: Int? = nil      // nil = 全部
     @State private var statusFilter: HouseStatus? = .available   // 首页默认显示待租房源
     @State private var layoutFilter: String? = nil
@@ -15,7 +15,7 @@ struct HouseListView: View {
 
     /// 当前 App 版本号（读自工程配置，如 1.9）
     private var appVersion: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
+        (Bundle.main.object(forInfoDictionaryKey: \u{22}CFBundleShortVersionString\u{22}) as? String) ?? \u{22}\u{22}
     }
 
     /// 筛选后的房源：默认待租，并按「座号 + 楼层 + 房号」升序排列（1座在前，同座先按楼层、再按房号从小到大）
@@ -65,14 +65,21 @@ struct HouseListView: View {
                     houseList
                 }
             }
-            .navigationTitle("房源管家")
+            .navigationTitle(\u{22}房源管家\u{22})
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Image(systemName: \u{22}gearshape\u{22})
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showAdd = true
                     } label: {
-                        Image(systemName: "plus")
+                        Image(systemName: \u{22}plus\u{22})
                             .font(.body.weight(.semibold))
                     }
                 }
@@ -88,17 +95,17 @@ struct HouseListView: View {
                     HouseEditView(house: h)
                 }
             }
-            .confirmationDialog("删除这套房源？", isPresented: Binding(
+            .confirmationDialog(\u{22}删除这套房源？\u{22}, isPresented: Binding(
                 get: { houseToDelete != nil },
                 set: { if !$0 { houseToDelete = nil } }
             ), titleVisibility: .visible) {
-                Button("删除房源", role: .destructive) {
+                Button(\u{22}删除房源\u{22}, role: .destructive) {
                     if let h = houseToDelete { deleteHouse(h) }
                     houseToDelete = nil
                 }
-                Button("取消", role: .cancel) {}
+                Button(\u{22}取消\u{22}, role: .cancel) {}
             } message: {
-                Text("将同时删除该房源的照片和视频，且无法恢复。")
+                Text(\u{22}将同时删除该房源的照片和视频，且无法恢复。\u{22})
             }
         }
     }
@@ -113,7 +120,7 @@ struct HouseListView: View {
         HStack(spacing: 12) {
             // 左上角：版本号徽章
             if !appVersion.isEmpty {
-                Text("v\(appVersion)")
+                Text(\u{22}v\u{22} + appVersion)
                     .font(.caption2.weight(.semibold))
                     .foregroundColor(AppTheme.primary)
                     .padding(.horizontal, 6)
@@ -123,11 +130,11 @@ struct HouseListView: View {
             }
 
             Label {
-                Text("房源统计")
+                Text(\u{22}房源统计\u{22})
                     .font(.footnote)
                     .foregroundColor(.secondary)
             } icon: {
-                Image(systemName: "building.2.fill")
+                Image(systemName: \u{22}building.2.fill\u{22})
                     .font(.footnote)
                     .foregroundColor(AppTheme.primary)
             }
@@ -140,17 +147,17 @@ struct HouseListView: View {
                     .foregroundColor(AppTheme.primary)
                     .lineLimit(1)
             } else if let status = statusFilter {
-                Text("\(status.label) \(filteredHouses.count) 套")
+                Text(\u{22}\(status.label) \(filteredHouses.count) 套\u{22})
                     .font(.footnote.weight(.semibold))
                     .foregroundColor(AppTheme.primary)
             } else {
-                Text("1座 \(tower1Count) 套")
+                Text(\u{22}1座 \(tower1Count) 套\u{22})
                     .font(.footnote.weight(.semibold))
                     .foregroundColor(AppTheme.primary)
-                Text("2座 \(tower2Count) 套")
+                Text(\u{22}2座 \(tower2Count) 套\u{22})
                     .font(.footnote.weight(.semibold))
                     .foregroundColor(AppTheme.primary)
-                Text("待租 \(availableCount) 套")
+                Text(\u{22}待租 \(availableCount) 套\u{22})
                     .font(.footnote.weight(.semibold))
                     .foregroundColor(AppTheme.primary)
             }
@@ -162,27 +169,27 @@ struct HouseListView: View {
 
     private var statsFilteredLabel: String {
         var parts: [String] = []
-        if let t = towerFilter { parts.append("\(t)座") }
+        if let t = towerFilter { parts.append(\u{22}\(t)座\u{22}) }
         if let l = layoutFilter { parts.append(l) }
-        parts.append("\(filteredHouses.count)套")
-        return parts.joined(separator: " ")
+        parts.append(\u{22}\(filteredHouses.count)套\u{22})
+        return parts.joined(separator: \u{22} \u{22})
     }
 
     // MARK: - 搜索
 
     private var searchBar: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
+            Image(systemName: \u{22}magnifyingglass\u{22})
                 .foregroundColor(.secondary)
-            TextField("搜索房号 / 房东 / 户型 / 备注", text: $searchText)
+            TextField(\u{22}搜索房号 / 房东 / 户型 / 备注\u{22}, text: $searchText)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .font(.subheadline)
             if !searchText.isEmpty {
                 Button {
-                    searchText = ""
+                    searchText = \u{22}\u{22}
                 } label: {
-                    Image(systemName: "xmark.circle.fill")
+                    Image(systemName: \u{22}xmark.circle.fill\u{22})
                         .foregroundColor(.secondary)
                 }
             }
@@ -202,25 +209,25 @@ struct HouseListView: View {
             // 第一行：座号 + 状态
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    filterChip(title: "全部座", isOn: towerFilter == nil) {
+                    filterChip(title: \u{22}全部座\u{22}, isOn: towerFilter == nil) {
                         towerFilter = nil
                     }
-                    filterChip(title: "1座", isOn: towerFilter == 1) {
+                    filterChip(title: \u{22}1座\u{22}, isOn: towerFilter == 1) {
                         towerFilter = 1
                     }
-                    filterChip(title: "2座", isOn: towerFilter == 2) {
+                    filterChip(title: \u{22}2座\u{22}, isOn: towerFilter == 2) {
                         towerFilter = 2
                     }
 
                     Divider().frame(height: 16)
 
-                    filterChip(title: "全部状态", isOn: statusFilter == nil) {
+                    filterChip(title: \u{22}全部状态\u{22}, isOn: statusFilter == nil) {
                         statusFilter = nil
                     }
-                    filterChip(title: "待租", isOn: statusFilter == .available) {
+                    filterChip(title: \u{22}待租\u{22}, isOn: statusFilter == .available) {
                         statusFilter = .available
                     }
-                    filterChip(title: "已租", isOn: statusFilter == .rented) {
+                    filterChip(title: \u{22}已租\u{22}, isOn: statusFilter == .rented) {
                         statusFilter = .rented
                     }
                 }
@@ -230,7 +237,7 @@ struct HouseListView: View {
             // 第二行：户型筛选（独立一行，选项随已收录房源的户型类型动态增减）
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    filterChip(title: "全部户型", isOn: layoutFilter == nil) {
+                    filterChip(title: \u{22}全部户型\u{22}, isOn: layoutFilter == nil) {
                         layoutFilter = nil
                     }
                     ForEach(layouts, id: \.self) { layout in
@@ -264,15 +271,15 @@ struct HouseListView: View {
         Group {
             if houses.isEmpty {
                 EmptyStateView(
-                    icon: "house",
-                    title: "还没有房源",
-                    subtitle: "点右上角「+」登记第一套房源"
+                    icon: \u{22}house\u{22},
+                    title: \u{22}还没有房源\u{22},
+                    subtitle: \u{22}点右上角「+」登记第一套房源\u{22}
                 )
             } else if filteredHouses.isEmpty {
                 EmptyStateView(
-                    icon: "magnifyingglass",
-                    title: "没有匹配的房源",
-                    subtitle: "换个搜索词或筛选条件试试"
+                    icon: \u{22}magnifyingglass\u{22},
+                    title: \u{22}没有匹配的房源\u{22},
+                    subtitle: \u{22}换个搜索词或筛选条件试试\u{22}
                 )
             } else {
                 ScrollView {
