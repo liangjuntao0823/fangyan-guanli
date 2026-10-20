@@ -92,22 +92,42 @@ enum CosUploader {
         }
     }
 
-    /// 为房源生成 H5 分享卡片：上传所有媒体 → 生成 index.html（og 标签用绝对 URL）→ 上传 → 返回长期有效的链接
+    /// 为房源生成 H5 分享卡片：
+    /// - v1.17：og 标签 / 媒体 src 全部用绝对签名 URL（10 年有效），微信能抓到封面渲染成卡片
+    /// - v1.18：分享页路径改为【无扩展名】h/<roomKey>/share（微信不再按 index.html 文件识别）；
+    ///   同一房源媒体与信息未变化时【零上传】直接复用上次链接；只新增媒体/只改信息时仅上传增量
     /// 入参全部为值类型（ShareMediaFile / ShareHouseInfo），Task 内不触碰 SwiftData 模型，避免跨线程访问闪退
-    /// v1.17：页面内图片/视频 src、og:image、og:url 全部使用【绝对签名 URL】（10 年有效），
-    /// 微信抓取 og 标签时能解析到封面图，才能把链接渲染成「网页卡片」（此前 og:image 用相对路径，微信无法解析，卡片生成失败）
     static func shareCard(mediaFiles: [ShareMediaFile], roomKey: String, info: ShareHouseInfo, config: CosConfig) async throws -> URL {
         guard !mediaFiles.isEmpty else { throw CosError.missingMedia }
 
-        // 1. 逐个上传媒体，并生成每个媒体的绝对 GET 签名 URL（供 HTML 内 src / og:image 使用）
+        // 0. 缓存命中：媒体清单、房源信息、COS 配置都没变化 → 直接复用上次链接，零上传
+        if let cached = ShareCacheStore.load(roomKey: roomKey),
+           cached.bucket == config.bucket,
+           cached.region == config.region,
+           Set(cached.mediaFiles) == Set(mediaFiles),
+           cached.info == info,
+           let cachedURL = URL(string: cached.shareURL) {
+            return cachedURL
+        }
+
+        // 1. 确定需上传的媒体：信息未变时只上传新增媒体（COS 上已存在的直接复用）；信息变了则媒体可全部复用
+        var toUpload = mediaFiles
+        if let cached = ShareCacheStore.load(roomKey: roomKey), cached.bucket == config.bucket, cached.region == config.region, cached.info == info {
+            let cachedSet = Set(cached.mediaFiles)
+            toUpload = mediaFiles.filter { !cachedSet.contains($0) }
+        }
+
+        // 2. 上传需要上传的媒体，并生成每个媒体的绝对 GET 签名 URL（供 HTML 内 src / og:image 使用）
         var mediaTags: [String] = []
         var imageAbsURLs: [String] = []   // 图片的绝对 URL 列表，第一张作为 og:image 封面
         for item in mediaFiles {
-            let url = MediaStore.url(for: item.name, roomKey: roomKey)
-            guard FileManager.default.fileExists(atPath: url.path) else { continue }
-            let data = try Data(contentsOf: url)
             let remotePath = "h/\(roomKey)/\(item.name)"
-            try await upload(data: data, to: remotePath, contentType: mimeType(for: item.kind), config: config)
+            if toUpload.contains(item) {
+                let url = MediaStore.url(for: item.name, roomKey: roomKey)
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                let data = try Data(contentsOf: url)
+                try await upload(data: data, to: remotePath, contentType: mimeType(for: item.kind), config: config)
+            }
             let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
             if item.kind == "video" {
                 mediaTags.append("<video class=\"v\" controls playsinline preload=\"metadata\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
@@ -118,32 +138,12 @@ enum CosUploader {
         }
         guard !mediaTags.isEmpty else { throw CosError.missingMedia }
 
-        // 2. 生成 index.html（og 标签用绝对 URL，微信抓取卡片）
+        // 3. 生成并上传分享页（路径无扩展名，微信识别为网页链接而非文件；Content-Type 保持 text/html）
         let title = "\(info.displayRoomNo) · \(info.layout.isEmpty ? "房源" : info.layout)"
         let desc = "\(info.priceText) · \(info.landlord.isEmpty ? "房东信息见页内" : info.landlord)"
-        let htmlPath = "h/\(roomKey)/index.html"
+        let pagePath = "h/\(roomKey)/share"
+        let shareURL = try presignedGetURL(for: pagePath, expires: shareLinkExpires, config: config)
         let html = buildHTML(
-            title: title,
-            desc: desc,
-            roomNo: info.displayRoomNo,
-            towerLabel: info.towerLabel,
-            layout: info.layout,
-            statusLabel: info.statusLabel,
-            priceText: info.priceText,
-            landlord: info.landlord,
-            password: info.password,
-            remark: info.remark,
-            mediaTags: mediaTags,
-            coverSrc: imageAbsURLs.first ?? "",
-            shareLink: ""
-        )
-        let htmlData = Data(html.utf8)
-        try await upload(data: htmlData, to: htmlPath, contentType: "text/html; charset=utf-8", config: config)
-        // 上传 index.html 后生成分享链接（10 年有效）
-        let shareURL = try presignedGetURL(for: htmlPath, expires: shareLinkExpires, config: config)
-
-        // 3. og:url 需要指向最终分享链接：重新生成一次 HTML（仅 og:url 不同）后覆盖上传
-        let htmlFinal = buildHTML(
             title: title,
             desc: desc,
             roomNo: info.displayRoomNo,
@@ -158,7 +158,16 @@ enum CosUploader {
             coverSrc: imageAbsURLs.first ?? "",
             shareLink: shareURL.absoluteString
         )
-        try await upload(data: Data(htmlFinal.utf8), to: htmlPath, contentType: "text/html; charset=utf-8", config: config)
+        try await upload(data: Data(html.utf8), to: pagePath, contentType: "text/html; charset=utf-8", config: config)
+
+        // 4. 更新缓存
+        ShareCacheStore.save(roomKey: roomKey, record: ShareCacheRecord(
+            mediaFiles: mediaFiles,
+            info: info,
+            shareURL: shareURL.absoluteString,
+            bucket: config.bucket,
+            region: config.region
+        ))
 
         return shareURL
     }

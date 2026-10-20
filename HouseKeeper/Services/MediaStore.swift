@@ -95,3 +95,39 @@ enum MediaStore {
         try? FileManager.default.removeItem(at: oldDir)
     }
 }
+
+// MARK: - 分享链接缓存（v1.18：同一房源的媒体与信息都没变化时，点分享直接复用上次链接，不再重复上传）
+
+/// 缓存的分享卡片记录：媒体清单 + 房源信息快照 + 上次生成的分享链接 + 当时的 COS 配置（换桶后自动失效）
+struct ShareCacheRecord: Codable {
+    let mediaFiles: [ShareMediaFile]
+    let info: ShareHouseInfo
+    let shareURL: String
+    let bucket: String
+    let region: String
+}
+
+enum ShareCacheStore {
+    private static var directory: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent("ShareCache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func fileURL(roomKey: String) -> URL {
+        directory.appendingPathComponent("\(roomKey).json")
+    }
+
+    static func load(roomKey: String) -> ShareCacheRecord? {
+        let url = fileURL(roomKey: roomKey)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(ShareCacheRecord.self, from: data)
+    }
+
+    static func save(roomKey: String, record: ShareCacheRecord) {
+        if let data = try? JSONEncoder().encode(record) {
+            try? data.write(to: fileURL(roomKey: roomKey))
+        }
+    }
+}
