@@ -13,6 +13,7 @@ struct HouseDetailView: View {
     @State private var showShare = false
     @State private var showDeleteConfirm = false
     @State private var showStatusConfirm = false
+    @State private var showShareModePicker = false    // v1.21：分享前先选「脱敏 / 完整」
     @State private var previewRoute: PhotoPreviewRoute? = nil
     @State private var shareItems: [Any] = []
     @State private var isSelecting = false          // 多选模式
@@ -60,6 +61,14 @@ struct HouseDetailView: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("将同时删除该房源的照片和视频，且无法恢复。")
+        }
+        .confirmationDialog("选择分享方式", isPresented: $showShareModePicker, titleVisibility: .visible) {
+            // v1.21：脱敏版隐藏房号/价格/房东，发给找房客户；完整版显示全部信息，发给同事
+            Button("发给客户（隐藏版）") { startShare(mode: .masked) }
+            Button("发给同事（完整版）") { startShare(mode: .full) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("隐藏版只显示户型、位置和您的联系方式；完整版额外显示房号、价格、房东和密码。")
         }
         .fullScreenCover(item: $previewRoute) { route in
             PhotoPreviewView(photos: house.photos, startIndex: route.index, roomKey: house.mediaRoomKey)
@@ -394,10 +403,23 @@ struct HouseDetailView: View {
         dismiss()
     }
 
-    /// 分享：生成 H5 卡片链接（上传照片视频到腾讯云 COS，og 标签用绝对 URL，微信渲染成网页卡片），系统分享面板发出链接
+    /// 分享入口（v1.21）：先做前置校验（配置 / 素材），再弹「脱敏 / 完整」选择器
+    private func shareHouseCard() {
+        guard let config = CosConfig.load(), config.isValid else {
+            shareError = "请先在首页左上角「设置」里填写云存储配置（腾讯云 COS），再分享卡片链接"
+            return
+        }
+        guard !house.mediaItems.isEmpty else {
+            shareError = "这套房源还没有照片或视频，先编辑添加素材再分享"
+            return
+        }
+        showShareModePicker = true
+    }
+
+    /// 按模式生成分享卡片链接并弹系统分享面板
     /// 注意：Task 内只传值类型（fileName/kind 数组 + 字符串字段），绝不直接访问 SwiftData @Model，
     /// 否则跨线程读取模型会闪退（分享闪退修复根因）
-    private func shareHouseCard() {
+    private func startShare(mode: ShareMode) {
         guard let config = CosConfig.load(), config.isValid else {
             shareError = "请先在首页左上角「设置」里填写云存储配置（腾讯云 COS），再分享卡片链接"
             return
@@ -405,6 +427,7 @@ struct HouseDetailView: View {
         // 先在主线程把所有数据拷成值类型，Task 里不再触碰 SwiftData 模型
         let files = house.mediaItems.map { ShareMediaFile(name: $0.fileName, kind: $0.kind) }
         let roomKey = house.mediaRoomKey
+        let profile = CosUploader.loadShareProfile()
         let info = ShareHouseInfo(
             displayRoomNo: house.displayRoomNo,
             towerLabel: house.towerLabel,
@@ -413,16 +436,14 @@ struct HouseDetailView: View {
             priceText: house.priceText,
             landlord: house.landlord,
             password: house.password,
-            remark: house.remark
+            remark: house.remark,
+            name: profile.name,
+            phone: profile.phone
         )
-        guard !files.isEmpty else {
-            shareError = "这套房源还没有照片或视频，先编辑添加素材再分享"
-            return
-        }
         isSharing = true
         Task {
             do {
-                let url = try await CosUploader.shareCard(mediaFiles: files, roomKey: roomKey, info: info, config: config)
+                let url = try await CosUploader.shareCard(mediaFiles: files, roomKey: roomKey, info: info, mode: mode, config: config)
                 await MainActor.run {
                     isSharing = false
                     shareItems = [url]
@@ -454,6 +475,8 @@ struct ShareHouseInfo: Equatable, Codable {
     let landlord: String
     let password: String
     let remark: String
+    let name: String?   // v1.21：分享名片姓名（设置页可编辑；Optional 兼容旧版缓存 JSON，缺失时按默认值渲染）
+    let phone: String?  // v1.21：分享名片电话
 }
 
 // MARK: - 照片大图预览路由
