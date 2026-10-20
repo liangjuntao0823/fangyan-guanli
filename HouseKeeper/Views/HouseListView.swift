@@ -11,7 +11,8 @@ struct HouseListView: View {
     @State private var layoutFilter: String? = nil
     @State private var showAdd = false
 
-    // v1.21：首页多选分享（一次选多套，每套单独生成一个分享卡片/链接）
+    // v1.22：首页多选分享——一次选多套，生成【一个合集分享卡片】（好友点开链接即可查看全部 N 套），
+    // 不再逐套生成链接逐次弹微信，避免 App 与微信来回跳转
     @State private var isSelecting = false
     @State private var selectedHouseIDs = Set<UUID>()
     @State private var showShareModePicker = false
@@ -89,7 +90,7 @@ struct HouseListView: View {
                         Button("取消") { exitMultiSelect() }
                     } else {
                         HStack(spacing: 14) {
-                            // v1.21：多选分享入口
+                            // v1.22：多选分享入口
                             Button {
                                 isSelecting = true
                             } label: {
@@ -108,13 +109,13 @@ struct HouseListView: View {
             .sheet(isPresented: $showAdd) {
                 HouseEditView(house: nil)
             }
-            // v1.21：多选分享——先选「脱敏 / 完整」，再逐套生成链接、依次弹分享面板
+            // v1.22：多选分享——选「脱敏 / 完整」后生成一个合集卡片链接
             .confirmationDialog("选择分享方式", isPresented: $showShareModePicker, titleVisibility: .visible) {
                 Button("发给客户（隐藏版）") { generateShareQueue(mode: .masked) }
                 Button("发给同事（完整版）") { generateShareQueue(mode: .full) }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("已选 \(selectedHouseIDs.count) 套，每套单独生成一个分享卡片。隐藏版不显示房号/价格/房东，完整版显示全部信息。")
+                Text("已选 \(selectedHouseIDs.count) 套，将生成一个合集分享卡片：好友点开链接即可查看全部房源，每套单独一页（含实拍图/视频）。隐藏版不显示房号/价格/房东，完整版显示全部信息。")
             }
             .sheet(item: $currentShareStep, onDismiss: {
                 // 上一张分享面板关闭后自动弹下一张；全部发完自动退出多选
@@ -360,7 +361,7 @@ struct HouseListView: View {
                 }
             }
         }
-        // v1.21：多选模式底部操作栏
+        // v1.22：多选模式底部操作栏
         .safeAreaInset(edge: .bottom) {
             if isSelecting {
                 HStack(spacing: 12) {
@@ -390,7 +391,7 @@ struct HouseListView: View {
         }
     }
 
-    // MARK: - v1.21 多选分享
+    // MARK: - v1.22 多选分享
 
     private func toggleHouseSelect(_ house: House) {
         if selectedHouseIDs.contains(house.id) {
@@ -429,8 +430,8 @@ struct HouseListView: View {
         showShareModePicker = true
     }
 
-    /// 逐套生成分享链接（每套单独一个卡片/链接），全部生成后依次弹系统分享面板
-    /// 注意：Task 内只传值类型，绝不直接访问 SwiftData @Model（跨线程读取模型会闪退）
+    /// v1.22：生成【合集分享卡片】（一次选 N 套 → 一个链接 → 好友点开看全部），生成后弹一次系统分享面板
+    /// 注意：值类型（ShareCollectionItem）在主线程构建完成，Task 内只传递值，绝不直接访问 SwiftData @Model（跨线程读取模型会闪退）
     private func generateShareQueue(mode: ShareMode) {
         guard let config = CosConfig.load(), config.isValid else {
             shareError = "请先点击左上角「设置」，填写云存储配置（腾讯云 COS）并保存验证，再分享卡片链接"
@@ -441,7 +442,6 @@ struct HouseListView: View {
             shareError = "选中的房源都没有照片或视频，先编辑添加素材再分享"
             return
         }
-        let profile = CosUploader.loadShareProfile()
         let sortedShareable = shareable.sorted { a, b in
             if a.tower != b.tower { return a.tower < b.tower }
             if a.floorNumber != b.floorNumber { return a.floorNumber < b.floorNumber }
@@ -449,52 +449,40 @@ struct HouseListView: View {
             return a.roomNo < b.roomNo
         }
 
+        // 主线程先构建值类型数组（Task 闭包内不触碰 @Model）
+        let rooms = sortedShareable.map { house -> ShareCollectionItem in
+            ShareCollectionItem(
+                roomKey: house.mediaRoomKey,
+                displayRoomNo: house.displayRoomNo,
+                towerLabel: house.towerLabel,
+                layout: house.layout,
+                statusLabel: house.status.label,
+                priceText: house.priceText,
+                landlord: house.landlord,
+                password: house.password,
+                remark: house.remark,
+                mediaFiles: house.mediaItems.map { ShareMediaFile(name: $0.fileName, kind: $0.kind) }
+            )
+        }
+
         isGenerating = true
-        generateTip = "正在生成分享卡片（1/\(sortedShareable.count)）…"
+        generateTip = "正在生成合集分享卡片（共 \(sortedShareable.count) 套）…"
 
         Task {
-            var urls: [URL] = []
-            var firstError: String?
-            for (index, house) in sortedShareable.enumerated() {
-                // 主线程先拷贝值类型（Task 闭包外捕获）
-                let files = house.mediaItems.map { ShareMediaFile(name: $0.fileName, kind: $0.kind) }
-                let roomKey = house.mediaRoomKey
-                let info = ShareHouseInfo(
-                    displayRoomNo: house.displayRoomNo,
-                    towerLabel: house.towerLabel,
-                    layout: house.layout,
-                    statusLabel: house.status.label,
-                    priceText: house.priceText,
-                    landlord: house.landlord,
-                    password: house.password,
-                    remark: house.remark,
-                    name: profile.name,
-                    phone: profile.phone
-                )
-                do {
-                    let url = try await CosUploader.shareCard(mediaFiles: files, roomKey: roomKey, info: info, mode: mode, config: config)
-                    urls.append(url)
-                } catch {
-                    if firstError == nil { firstError = error.localizedDescription }
+            do {
+                let url = try await CosUploader.shareCollection(rooms: rooms, mode: mode, config: config)
+                await MainActor.run {
+                    isGenerating = false
+                    shareQueue = [url]
+                    shareIndex = 0
+                    currentShareStep = ShareStep(url: url)
                 }
-                let done = index + 1
-                let tip = "正在生成分享卡片（\(done)/\(sortedShareable.count)）…"
-                await MainActor.run { generateTip = tip }
-            }
-
-            await MainActor.run {
-                isGenerating = false
-                if urls.isEmpty {
-                    shareError = firstError ?? "生成分享链接失败，请重试"
+            } catch {
+                await MainActor.run {
+                    isGenerating = false
+                    shareError = error.localizedDescription
                     exitMultiSelect()
-                    return
                 }
-                if let firstError, urls.count < sortedShareable.count {
-                    shareError = "有 \(sortedShareable.count - urls.count) 套生成失败（\(firstError)），已生成 \(urls.count) 套"
-                }
-                shareQueue = urls
-                shareIndex = 0
-                currentShareStep = ShareStep(url: urls[0])
             }
         }
     }
