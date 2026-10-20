@@ -23,9 +23,9 @@ struct SettingsView: View {
         Form {
             Section {
                 LabeledContent("用途", value: "分享房源卡片链接")
-                LabeledContent("有效期", value: "30 天（到期自动失效）")
+                LabeledContent("有效期", value: "长期有效（不自动过期）")
             } footer: {
-                Text("分享时 App 会把该房源的图片和视频上传到腾讯云 COS，生成一个链接卡片发给微信好友；好友点开卡片即可查看。")
+                Text("分享时 App 会把该房源的图片和视频上传到腾讯云 COS，生成一个链接卡片发给微信好友；好友点开卡片即可查看，链接长期有效。")
             }
 
             Section("腾讯云 COS 配置") {
