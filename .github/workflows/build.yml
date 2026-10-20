@@ -65,11 +65,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SETTINGS="$(xcodebuild -project "$PROJECT_PATH" -scheme "$SCHEME" -configuration "$CONFIGURATION" -destination 'generic/platform=iOS' -showBuildSettings 2>/dev/null)"
-          echo "SETTINGS_LEN=${#SETTINGS}"
-          printf '%s\n' "$SETTINGS" | grep -E 'MARKETING_VERSION|CURRENT_PROJECT_VERSION|WRAPPER_NAME|FULL_PRODUCT_NAME' | head -10 || true
-          VERSION="$(printf '%s\n' "$SETTINGS" | awk -F ' = ' '/MARKETING_VERSION/ {gsub(/[; \"]/,"",$2); print $2; exit}')"
-          BUILD="$(printf '%s\n' "$SETTINGS" | awk -F ' = ' '/CURRENT_PROJECT_VERSION/ {gsub(/[; \"]/,"",$2); print $2; exit}')"
+          PBX="$PROJECT_PATH/project.pbxproj"
+          test -s "$PBX"
+          VERSION="$(sed -n 's/^[[:space:]]*MARKETING_VERSION = \(.*\);\1/p' "$PBX" | head -1 | tr -d '"')"
+          BUILD="$(sed -n 's/^[[:space:]]*CURRENT_PROJECT_VERSION = \(.*\);\1/p' "$PBX" | head -1 | tr -d '"')"
+          SETTINGS="$(xcodebuild -project "$PROJECT_PATH" -scheme "$SCHEME" -configuration "$CONFIGURATION" -showBuildSettings 2>/dev/null || true)"
+          printf '%s\n' "$SETTINGS" | grep -E 'PRODUCT_BUNDLE_IDENTIFIER|GENERATE_INFOPLIST|INFOPLIST_KEY_CFBundleShortVersionString|WRAPPER_NAME' | head -10 || true
           PRODUCT_NAME="$(printf '%s\n' "$SETTINGS" | awk -F ' = ' '/WRAPPER_NAME/ {gsub(/[; \"]/,"",$2); print $2; exit}')"
           if [[ -z "$PRODUCT_NAME" ]]; then
             PRODUCT_NAME="$(printf '%s\n' "$SETTINGS" | awk -F ' = ' '/FULL_PRODUCT_NAME/ {gsub(/[; \"]/,"",$2); print $2; exit}')"
