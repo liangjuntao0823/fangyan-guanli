@@ -228,10 +228,32 @@ enum CosUploader {
         request.httpMethod = "PUT"
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.httpBody = data
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (respData, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw CosError.uploadFailed("HTTP \(String(describing: (response as? HTTPURLResponse)?.statusCode))")
+            // 读取 COS 返回的 XML 错误码（SignatureDoesNotMatch / InvalidAccessKeyId / AccessDenied 等），精确定位 403 原因
+            let detail = extractCosError(from: respData)
+            let statusText: String
+            if let http = response as? HTTPURLResponse {
+                statusText = "HTTP \(http.statusCode)"
+            } else {
+                statusText = "网络响应无效"
+            }
+            throw CosError.uploadFailed(statusText + (detail.isEmpty ? "" : "（" + detail + "）"))
         }
+    }
+
+    /// 从 COS 错误响应 XML 中提取 Error Code 与 Message
+    private static func extractCosError(from data: Data) -> String {
+        guard let text = String(data: data, encoding: .utf8) else { return "" }
+        func value(of tag: String) -> String? {
+            guard let start = text.range(of: "<\(tag)>")?.upperBound,
+                  let end = text[start...].range(of: "</\(tag)>")?.lowerBound else { return nil }
+            return String(text[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let code = value(of: "Code") ?? ""
+        let message = value(of: "Message") ?? ""
+        if code.isEmpty { return "" }
+        return message.isEmpty ? "错误码 \(code)" : "错误码 \(code)：\(message)"
     }
 
     private static func host(for config: CosConfig) -> String {
