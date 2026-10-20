@@ -15,10 +15,11 @@ struct HouseDetailView: View {
     @State private var showStatusConfirm = false
     @State private var previewRoute: PhotoPreviewRoute? = nil
     @State private var shareItems: [Any] = []
+    @State private var pendingVideoShare = false          // 图片分享完成后，是否继续分享视频
+    @State private var pendingVideoURLs: [URL] = []
     @State private var isSelecting = false          // 多选模式
     @State private var selectedMediaNames = Set<String>()   // 用唯一 fileName 标记选中
     @State private var saveTip: String?
-    @State private var isSharing = false           // 生成分享卡片中
     @State private var shareError: String?
 
     var body: some View {
@@ -43,7 +44,18 @@ struct HouseDetailView: View {
         }
         .sheet(isPresented: $showShare) {
             // 注意：UIActivityViewController 不能加 presentationDetents，否则弹分享面板会闪退
-            ShareSheet(items: shareItems)
+            // 分享完成后自动衔接下一轮：先发图片，再发视频，避免微信把混合媒体降级成「文件」消息
+            ShareSheet(items: shareItems) {
+                if pendingVideoShare {
+                    pendingVideoShare = false
+                    let urls = pendingVideoURLs
+                    pendingVideoURLs = []
+                    DispatchQueue.main.async {
+                        shareItems = urls
+                        showShare = true
+                    }
+                }
+            }
         }
         .confirmationDialog("切换房源状态", isPresented: $showStatusConfirm, titleVisibility: .visible) {
             if house.status == .available {
@@ -63,23 +75,6 @@ struct HouseDetailView: View {
         }
         .fullScreenCover(item: $previewRoute) { route in
             PhotoPreviewView(photos: house.photos, startIndex: route.index, roomKey: house.mediaRoomKey)
-        }
-        .overlay {
-            if isSharing {
-                ZStack {
-                    Color.black.opacity(0.35).ignoresSafeArea()
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .tint(.white)
-                        Text("正在生成分享卡片，上传照片和视频…")
-                            .font(.footnote)
-                            .foregroundColor(.white)
-                    }
-                    .padding(20)
-                    .background(Color.black.opacity(0.6))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-            }
         }
         .alert("无法分享", isPresented: Binding(
             get: { shareError != nil },
@@ -394,66 +389,35 @@ struct HouseDetailView: View {
         dismiss()
     }
 
-    /// 分享：生成 H5 卡片链接（上传照片视频到腾讯云 COS），系统分享面板发出链接
-    /// 注意：Task 内只传值类型（fileName/kind 数组 + 字符串字段），绝不直接访问 SwiftData @Model，
-    /// 否则跨线程读取模型会闪退（分享闪退修复根因）
+    /// 分享：直接分享本地照片和视频文件给微信（好友收到图片消息 / 视频消息，直接可看），
+    /// 不再生成 H5 链接（微信会把链接识别成 index.html 文件，好友无法预览）。
+    /// 图片和视频分两轮分享：先发图片（多张图片消息，观感接近收藏笔记的图片网格），
+    /// 再发视频，避免混合媒体被微信降级成「文件」消息。
     private func shareHouseCard() {
-        guard let config = CosConfig.load(), config.isValid else {
-            shareError = "请先在首页左上角「设置」里填写云存储配置（腾讯云 COS），再分享卡片链接"
-            return
-        }
-        // 先在主线程把所有需要的数据拷成值类型，Task 里不再触碰 SwiftData 模型
-        let files = house.mediaItems.map { ShareMediaFile(name: $0.fileName, kind: $0.kind) }
-        let roomKey = house.mediaRoomKey
-        let info = ShareHouseInfo(
-            displayRoomNo: house.displayRoomNo,
-            towerLabel: house.towerLabel,
-            layout: house.layout,
-            statusLabel: house.status.label,
-            priceText: house.priceText,
-            landlord: house.landlord,
-            password: house.password,
-            remark: house.remark
-        )
-        guard !files.isEmpty else {
+        let photos = house.photos
+        let videos = house.videos
+        guard !photos.isEmpty || !videos.isEmpty else {
             shareError = "这套房源还没有照片或视频，先编辑添加素材再分享"
             return
         }
-        isSharing = true
-        Task {
-            do {
-                let url = try await CosUploader.shareCard(mediaFiles: files, roomKey: roomKey, info: info, config: config)
-                await MainActor.run {
-                    isSharing = false
-                    shareItems = [url]
-                    showShare = true
-                }
-            } catch {
-                await MainActor.run {
-                    isSharing = false
-                    shareError = error.localizedDescription
-                }
-            }
+        // 主线程读取本地文件，分享面板直接用值，不触碰 SwiftData 模型
+        let images = photos.compactMap { media -> UIImage? in
+            UIImage(contentsOfFile: MediaStore.url(for: media.fileName, roomKey: house.mediaRoomKey).path)
+        }
+        let videoURLs = videos.map { MediaStore.url(for: $0.fileName, roomKey: house.mediaRoomKey) }
+
+        if !images.isEmpty {
+            // 第一轮：图片（微信识别为图片消息，好友直接看到多张图片）
+            shareItems = images
+            pendingVideoURLs = videoURLs
+            pendingVideoShare = !videoURLs.isEmpty
+            showShare = true
+        } else if !videoURLs.isEmpty {
+            // 只有视频：直接分享视频
+            shareItems = videoURLs
+            showShare = true
         }
     }
-}
-
-// MARK: - 分享值类型（Task 内安全传递，不触碰 SwiftData 模型）
-
-struct ShareMediaFile: Equatable {
-    let name: String
-    let kind: String
-}
-
-struct ShareHouseInfo: Equatable {
-    let displayRoomNo: String
-    let towerLabel: String
-    let layout: String
-    let statusLabel: String
-    let priceText: String
-    let landlord: String
-    let password: String
-    let remark: String
 }
 
 // MARK: - 照片大图预览路由

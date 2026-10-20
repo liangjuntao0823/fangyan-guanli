@@ -348,11 +348,16 @@ struct FullScreenVideoPlayer: View {
 
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
+    var onComplete: (() -> Void)? = nil
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
         // 空内容保护：UIActivityViewController 不接受空 activityItems，否则直接崩溃
         let safeItems = items.isEmpty ? [""] : items
         let controller = UIActivityViewController(activityItems: safeItems, applicationActivities: nil)
+        // 分享完成（发送 / 取消）回调：图片分享完后自动衔接视频分享
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            onComplete?()
+        }
         // iPad 上必须指定 popover 锚点，否则系统直接崩溃；iPhone 自动跳过
         if UIDevice.current.userInterfaceIdiom == .pad,
            let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
