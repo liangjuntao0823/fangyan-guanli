@@ -10,6 +10,7 @@ struct HouseListView: View {
     @State private var statusFilter: HouseStatus? = .available   // 首页默认显示待租房源
     @State private var layoutFilter: String? = nil
     @State private var showAdd = false
+    @State private var houseToDelete: House?
 
     /// 筛选后的房源：默认待租，并按「座号 + 房号」升序排列（1座在前，同座按房号数字从小到大）
     private var filteredHouses: [House] {
@@ -43,6 +44,7 @@ struct HouseListView: View {
 
     private var tower1Count: Int { houses.filter { $0.tower == 1 }.count }
     private var tower2Count: Int { houses.filter { $0.tower == 2 }.count }
+    private var availableCount: Int { houses.filter { $0.status == .available }.count }
 
     var body: some View {
         NavigationStack {
@@ -71,15 +73,31 @@ struct HouseListView: View {
             .sheet(isPresented: $showAdd) {
                 HouseEditView(house: nil)
             }
+            .confirmationDialog("删除这套房源？", isPresented: Binding(
+                get: { houseToDelete != nil },
+                set: { if !$0 { houseToDelete = nil } }
+            ), titleVisibility: .visible) {
+                Button("删除房源", role: .destructive) {
+                    if let h = houseToDelete { deleteHouse(h) }
+                    houseToDelete = nil
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("将同时删除该房源的照片和视频，且无法恢复。")
+            }
         }
     }
 
-    // MARK: - 统计（1座 / 2座分开显示）
+    // MARK: - 统计（动态跟随当前筛选）
+    // 规则：
+    //  - 筛选了座号 / 户型 → 显示筛选口径数量（如「1座 X套」「1座 单间上层 X套」，状态为隐含条件不拼入）
+    //  - 仅筛选状态（默认待租）→ 显示「待租 X套 / 已租 X套」
+    //  - 无任何筛选 → 显示「1座 X套（已租+待租） 2座 X套（已租+待租） 待租 X套」
 
     private var statsBar: some View {
         HStack(spacing: 12) {
             Label {
-                Text("目前已收录房源总计")
+                Text("房源统计")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             } icon: {
@@ -90,16 +108,38 @@ struct HouseListView: View {
 
             Spacer()
 
-            Text("1座 \(tower1Count) 套")
-                .font(.footnote.weight(.semibold))
-                .foregroundColor(AppTheme.primary)
-            Text("2座 \(tower2Count) 套")
-                .font(.footnote.weight(.semibold))
-                .foregroundColor(AppTheme.primary)
+            if towerFilter != nil || layoutFilter != nil {
+                Text(statsFilteredLabel)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+                    .lineLimit(1)
+            } else if let status = statusFilter {
+                Text("\(status.label) \(filteredHouses.count) 套")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+            } else {
+                Text("1座 \(tower1Count) 套")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+                Text("2座 \(tower2Count) 套")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+                Text("待租 \(availableCount) 套")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color.white)
+    }
+
+    private var statsFilteredLabel: String {
+        var parts: [String] = []
+        if let t = towerFilter { parts.append("\(t)座") }
+        if let l = layoutFilter { parts.append(l) }
+        parts.append("\(filteredHouses.count)套")
+        return parts.joined(separator: " ")
     }
 
     // MARK: - 搜索
@@ -192,7 +232,7 @@ struct HouseListView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 列表
+    // MARK: - 列表（右滑卡片露出 已租/删除 按钮）
 
     private var houseList: some View {
         Group {
@@ -215,7 +255,11 @@ struct HouseListView: View {
                             NavigationLink {
                                 HouseDetailView(house: house)
                             } label: {
-                                HouseCardView(house: house)
+                                SwipeableHouseCard(
+                                    house: house,
+                                    onToggleStatus: { toggleStatus(house) },
+                                    onDelete: { houseToDelete = house }
+                                )
                             }
                             .buttonStyle(.plain)
                         }
@@ -225,6 +269,20 @@ struct HouseListView: View {
                 }
             }
         }
+    }
+
+    // MARK: - 右滑操作（切换状态 / 删除）
+
+    private func toggleStatus(_ house: House) {
+        house.status = house.status == .available ? .rented : .available
+        house.updatedAt = Date()
+        try? modelContext.save()
+    }
+
+    private func deleteHouse(_ house: House) {
+        MediaStore.deleteAll(files: house.mediaItems.map(\.fileName), roomKey: house.mediaRoomKey)
+        modelContext.delete(house)
+        try? modelContext.save()
     }
 }
 
