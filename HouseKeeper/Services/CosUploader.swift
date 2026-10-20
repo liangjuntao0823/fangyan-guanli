@@ -88,8 +88,8 @@ enum CosUploader {
         }
     }
 
-    /// 为房源生成 H5 分享卡片：上传所有媒体 → 生成 index.html → 上传 → 返回 30 天有效链接
-    static func shareCard(for house: House, config: CosConfig) async throws -> String {
+    /// 为房源生成 H5 分享卡片：上传所有媒体 → 生成 index.html → 上传 → 返回 30 天有效链接（URL 对象，系统分享面板可直接作为链接分享）
+    static func shareCard(for house: House, config: CosConfig) async throws -> URL {
         let media = house.mediaItems
         guard !media.isEmpty else { throw CosError.missingMedia }
 
@@ -252,7 +252,6 @@ enum CosUploader {
 
         let hostValue = host(for: config)
         let pathWithSlash = "/" + path
-        let canonicalQuery = ""
         let headerList = "host"
         let headerValue = "host=\(hostValue.lowercased())"
 
