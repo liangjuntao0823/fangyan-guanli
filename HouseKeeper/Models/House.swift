@@ -92,14 +92,27 @@ extension House {
     /// 媒体存储目录名（按房号，去除文件系统非法字符）
     var mediaRoomKey: String {
         let raw = tower == 2 ? "2-\(roomNo)" : roomNo
-        let illegal = CharacterSet(charactersIn: "/:\\?%*|\"<>")
+        let illegal = CharacterSet(charactersIn: "/:\\?%*|"<>")
         return raw.components(separatedBy: illegal).joined(separator: "-")
     }
 
-    /// 房号数字部分（用于首页按「座号 + 房号」升序排序，如 1420上 → 1420）
-    var sortRoomNo: Int {
+    /// 楼层（用于首页按「座号 + 楼层 + 房号」升序排序）：
+    ///  - 3 位房号（如 634）：第 1 位是楼层 → 6楼34号
+    ///  - 4 位房号（如 1420）：前 2 位是楼层 → 14楼20号
+    /// 统一规则：房号数字的最后 2 位是房号，前面剩余位是楼层
+    var floorNumber: Int {
         let digits = roomNo.prefix { $0.isNumber }
-        return Int(digits) ?? 0
+        let s = String(digits)
+        guard s.count >= 3 else { return Int(s) ?? 0 }
+        return Int(s.dropLast(2)) ?? 0
+    }
+
+    /// 房号数字（数字部分最后 2 位，如 634 → 34，1420 → 20）
+    var roomNumber: Int {
+        let digits = roomNo.prefix { $0.isNumber }
+        let s = String(digits)
+        guard s.count >= 2 else { return Int(s) ?? 0 }
+        return Int(s.suffix(2)) ?? 0
     }
 
     var priceText: String { "\(price)元/月" }

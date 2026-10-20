@@ -12,7 +12,7 @@ struct HouseListView: View {
     @State private var showAdd = false
     @State private var houseToDelete: House?
 
-    /// 筛选后的房源：默认待租，并按「座号 + 房号」升序排列（1座在前，同座按房号数字从小到大）
+    /// 筛选后的房源：默认待租，并按「座号 + 楼层 + 房号」升序排列（1座在前，同座先按楼层、再按房号从小到大）
     private var filteredHouses: [House] {
         houses
             .filter { house in
@@ -32,8 +32,9 @@ struct HouseListView: View {
             }
             .sorted { a, b in
                 if a.tower != b.tower { return a.tower < b.tower }
-                if a.sortRoomNo != b.sortRoomNo { return a.sortRoomNo < b.sortRoomNo }
-                // 同号同层（如 1420上 / 1420下）：按原始房号字符串稳定排序
+                if a.floorNumber != b.floorNumber { return a.floorNumber < b.floorNumber }
+                if a.roomNumber != b.roomNumber { return a.roomNumber < b.roomNumber }
+                // 同座同层同号（如 1420上 / 1420下）：按原始房号字符串稳定排序
                 return a.roomNo < b.roomNo
             }
     }
@@ -201,7 +202,7 @@ struct HouseListView: View {
                 .padding(.horizontal, 16)
             }
 
-            // 第二行：户型筛选（独立一行，选项随已收录房源的户型动态增减）
+            // 第二行：户型筛选（独立一行，选项随已收录房源的户型类型动态增减）
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     filterChip(title: "全部户型", isOn: layoutFilter == nil) {

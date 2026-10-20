@@ -80,7 +80,7 @@ struct HouseDetailView: View {
                 Spacer()
                 if house.hasPhoto || house.hasVideo {
                     if isSelecting {
-                        // 多选模式：取消按钮（胶囊形，大小随文字自适应）
+                        // 多选模式：取消按钮（与「多选」按钮同款品牌色胶囊）
                         Button {
                             exitSelecting()
                         } label: {
@@ -88,8 +88,8 @@ struct HouseDetailView: View {
                                 .font(.subheadline.weight(.medium))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 5)
-                                .background(Color(.systemGray5))
-                                .foregroundColor(.primary)
+                                .background(AppTheme.primary)
+                                .foregroundColor(.white)
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)

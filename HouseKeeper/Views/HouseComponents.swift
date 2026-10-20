@@ -424,7 +424,7 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-// MARK: - 空状态
+// MARK: - 空状态（占满剩余空间并垂直居中，避免筛选无匹配时内容下沉）
 
 struct EmptyStateView: View {
     let icon: String
@@ -444,7 +444,7 @@ struct EmptyStateView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 60)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 32)
     }
 }
