@@ -440,7 +440,7 @@ struct HouseDetailView: View {
 
 // MARK: - 分享值类型（Task 内安全传递 + 分享缓存 JSON 编解码，不触碰 SwiftData 模型）
 
-struct ShareMediaFile: Equatable, Codable {
+struct ShareMediaFile: Hashable, Codable {
     let name: String
     let kind: String
 }
