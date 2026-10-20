@@ -114,6 +114,11 @@ struct MediaThumbView: View {
 }
 
 // MARK: - 房源卡片
+// 布局：左上封面 + 右侧信息
+//  第一行：房号（加大加粗）+ 价格（加大加粗），状态徽章在右上角
+//  第二行：户型 + 实拍图情况
+//  第三行：密码
+//  第四行：备注
 
 struct HouseCardView: View {
     let house: House
@@ -133,42 +138,48 @@ struct HouseCardView: View {
             .frame(width: 92, height: 76)
             .clipShape(RoundedRectangle(cornerRadius: 10))
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                // 第一行：房号 + 价格（都加大加粗），状态徽章在右上角
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(house.displayRoomNo)
-                        .font(.headline)
-                        .foregroundColor(AppTheme.primary)
-                    StatusBadge(status: house.status)
-                    Spacer(minLength: 0)
-                }
-
-                Text(house.towerLabel)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-
-                if !house.layout.isEmpty {
-                    Text(house.layout)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-
-                HStack(spacing: 6) {
+                        .font(.title3.weight(.bold))
+                        .foregroundColor(.primary)
                     Text(house.priceText)
-                        .font(.subheadline.weight(.bold))
+                        .font(.headline.weight(.bold))
                         .foregroundColor(AppTheme.accent)
+                    Spacer(minLength: 0)
+                    StatusBadge(status: house.status)
+                }
+
+                // 第二行：户型 + 实拍图情况
+                HStack(spacing: 6) {
+                    Text(house.layout.isEmpty ? "户型未填" : house.layout)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                     if house.hasPhoto || house.hasVideo {
                         Image(systemName: "photo.fill")
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundColor(.secondary)
-                        Text(house.hasPhoto && house.hasVideo ? "照片+视频" : (house.hasPhoto ? "有实拍图" : "有视频"))
-                            .font(.caption)
+                        Text(mediaSummary)
+                            .font(.footnote)
                             .foregroundColor(.secondary)
                     } else {
                         Text("无实拍图")
-                            .font(.caption)
+                            .font(.footnote)
                             .foregroundColor(.secondary)
                     }
                 }
+
+                // 第三行：密码
+                Text("密码：\(house.password.isEmpty ? "—" : house.password)")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+
+                // 第四行：备注
+                Text("备注：\(house.remark.isEmpty ? "—" : house.remark)")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
             }
             .padding(.vertical, 2)
         }
@@ -182,6 +193,11 @@ struct HouseCardView: View {
         .fullScreenCover(item: $playingVideo) { media in
             FullScreenVideoPlayer(media: media, roomKey: house.mediaRoomKey)
         }
+    }
+
+    private var mediaSummary: String {
+        if house.hasPhoto && house.hasVideo { return "照片+视频" }
+        return house.hasPhoto ? "有实拍图" : "有视频"
     }
 
     private var coverView: some View {
@@ -215,6 +231,100 @@ struct HouseCardView: View {
             playingVideo = firstVideo
         } else if !house.photos.isEmpty {
             previewRoute = PhotoPreviewRoute(index: 0)
+        }
+    }
+}
+
+// MARK: - 可右滑卡片（手指向右滑动卡片，露出左侧「已租 / 删除」按钮）
+
+struct SwipeableHouseCard: View {
+    let house: House
+    let onToggleStatus: () -> Void
+    let onDelete: () -> Void
+
+    @State private var offset: CGFloat = 0
+    private let actionWidth: CGFloat = 78
+    private var maxOffset: CGFloat { actionWidth * 2 }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            // 底层操作按钮（卡片向右滑开后露出）
+            HStack(spacing: 0) {
+                actionButton(
+                    title: house.status == .available ? "已租" : "待租",
+                    icon: house.status == .available ? "checkmark" : "arrow.uturn.backward",
+                    color: Color(red: 0.24, green: 0.58, blue: 0.34),
+                    action: onToggleStatus
+                )
+                actionButton(
+                    title: "删除",
+                    icon: "trash",
+                    color: Color.red,
+                    action: onDelete
+                )
+                Spacer(minLength: 0)
+            }
+            .frame(maxHeight: .infinity)
+
+            HouseCardView(house: house)
+                .offset(x: offset)
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if value.translation.width > 0 {
+                                // 右滑：露出左侧操作按钮
+                                offset = min(value.translation.width, maxOffset)
+                            } else if offset > 0 {
+                                // 左滑：收回卡片
+                                offset = max(offset + value.translation.width, 0)
+                            }
+                        }
+                        .onEnded { value in
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                offset = value.translation.width > actionWidth ? maxOffset : 0
+                            }
+                        }
+                )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func actionButton(title: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { offset = 0 }
+            action()
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.body.weight(.semibold))
+                Text(title)
+                    .font(.footnote.weight(.semibold))
+            }
+            .foregroundColor(.white)
+            .frame(width: actionWidth)
+            .frame(maxHeight: .infinity)
+            .background(color)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - 详情页视频条目（缩略图 + 播放三角，点击全屏播放，播放界面长按可保存视频到相册）
+
+struct HouseDetailVideoItem: View {
+    let media: MediaItem
+    let roomKey: String
+    @State private var playing = false
+
+    var body: some View {
+        Button {
+            playing = true
+        } label: {
+            MediaThumbView(media: media, roomKey: roomKey)
+        }
+        .buttonStyle(.plain)
+        .fullScreenCover(isPresented: $playing) {
+            FullScreenVideoPlayer(media: media, roomKey: roomKey)
         }
     }
 }
