@@ -98,9 +98,17 @@ extension House {
     }
 
     /// 房号数字串（兼容「1-2334」「2-1006」「634上」「2355下」等写法：
-    /// 从末尾反向提取连续数字，忽略座号前缀与「上/下/层」等后缀）
+    /// 从末尾开始提取第一段连续数字，忽略座号前缀与「上/下/层」等后缀文字）
     private var sortDigits: String {
-        String(roomNo.reversed().prefix { $0.isNumber }.reversed())
+        var collected = ""
+        for ch in roomNo.reversed() {
+            if ch.isNumber {
+                collected.append(ch)
+            } else if !collected.isEmpty {
+                break
+            }
+        }
+        return String(collected.reversed())
     }
 
     /// 楼层（用于首页按「座号 + 楼层 + 房号」升序排序）：
