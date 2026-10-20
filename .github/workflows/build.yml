@@ -95,7 +95,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            clean build | tee xcodebuild.log
+            clean build
       - name: Ad-hoc sign App
         shell: bash
         env:
@@ -121,15 +121,6 @@ jobs:
           (cd artifacts && /usr/bin/zip -qry "$IPA_NAME" Payload)
           test -s "artifacts/$IPA_NAME"
           echo "ipa_path=artifacts/$IPA_NAME" >> "$GITHUB_OUTPUT"
-      - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: unsigned-ipa-v${{ steps.metadata.outputs.version }}-b${{ steps.metadata.outputs.build }}
-          path: ${{ steps.package.outputs.ipa_path }}
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
       - name: Publish IPA to Release
         shell: bash
         env:
@@ -146,11 +137,3 @@ jobs:
             --title "房源管家 ${VERSION} (build ${BUILD})" \
             --notes "免签名 IPA（ad-hoc），巨魔商店 / 爱思助手可安装" \
             --prerelease
-      - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xcodebuild-log-${{ github.run_number }}
-          path: xcodebuild.log
-          if-no-files-found: ignore
-          retention-days: 14
