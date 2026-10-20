@@ -235,21 +235,29 @@ struct HouseCardView: View {
     }
 }
 
-// MARK: - 可右滑卡片（手指向右滑动卡片，露出左侧「已租 / 删除」按钮）
+// MARK: - 可左滑卡片（手指向左滑动卡片，露出右侧「编辑 / 已租 / 删除」按钮）
 
 struct SwipeableHouseCard: View {
     let house: House
     let onToggleStatus: () -> Void
+    let onEdit: () -> Void
     let onDelete: () -> Void
 
     @State private var offset: CGFloat = 0
-    private let actionWidth: CGFloat = 78
-    private var maxOffset: CGFloat { actionWidth * 2 }
+    private let actionWidth: CGFloat = 64
+    private var maxOffset: CGFloat { actionWidth * 3 }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            // 底层操作按钮（卡片向右滑开后露出）
+        ZStack(alignment: .trailing) {
+            // 底层操作按钮（卡片向左滑开后露出）：编辑 | 已租/待租 | 删除
             HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                actionButton(
+                    title: "编辑",
+                    icon: "pencil",
+                    color: AppTheme.primary,
+                    action: onEdit
+                )
                 actionButton(
                     title: house.status == .available ? "已租" : "待租",
                     icon: house.status == .available ? "checkmark" : "arrow.uturn.backward",
@@ -262,7 +270,6 @@ struct SwipeableHouseCard: View {
                     color: Color.red,
                     action: onDelete
                 )
-                Spacer(minLength: 0)
             }
             .frame(maxHeight: .infinity)
 
@@ -271,17 +278,17 @@ struct SwipeableHouseCard: View {
                 .gesture(
                     DragGesture()
                         .onChanged { value in
-                            if value.translation.width > 0 {
-                                // 右滑：露出左侧操作按钮
-                                offset = min(value.translation.width, maxOffset)
-                            } else if offset > 0 {
-                                // 左滑：收回卡片
-                                offset = max(offset + value.translation.width, 0)
+                            if value.translation.width < 0 {
+                                // 左滑：露出右侧操作按钮
+                                offset = max(value.translation.width, -maxOffset)
+                            } else if offset < 0 {
+                                // 右滑：收回卡片
+                                offset = min(offset + value.translation.width, 0)
                             }
                         }
                         .onEnded { value in
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                offset = value.translation.width > actionWidth ? maxOffset : 0
+                                offset = value.translation.width < -actionWidth ? -maxOffset : 0
                             }
                         }
                 )

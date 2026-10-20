@@ -10,6 +10,7 @@ struct HouseListView: View {
     @State private var statusFilter: HouseStatus? = .available   // 首页默认显示待租房源
     @State private var layoutFilter: String? = nil
     @State private var showAdd = false
+    @State private var houseToEdit: House?
     @State private var houseToDelete: House?
 
     /// 筛选后的房源：默认待租，并按「座号 + 楼层 + 房号」升序排列（1座在前，同座先按楼层、再按房号从小到大）
@@ -73,6 +74,14 @@ struct HouseListView: View {
             }
             .sheet(isPresented: $showAdd) {
                 HouseEditView(house: nil)
+            }
+            .sheet(isPresented: Binding(
+                get: { houseToEdit != nil },
+                set: { if !$0 { houseToEdit = nil } }
+            )) {
+                if let h = houseToEdit {
+                    HouseEditView(house: h)
+                }
             }
             .confirmationDialog("删除这套房源？", isPresented: Binding(
                 get: { houseToDelete != nil },
@@ -233,7 +242,7 @@ struct HouseListView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 列表（右滑卡片露出 已租/删除 按钮）
+    // MARK: - 列表（左滑卡片露出 编辑/已租/删除 按钮）
 
     private var houseList: some View {
         Group {
@@ -259,6 +268,7 @@ struct HouseListView: View {
                                 SwipeableHouseCard(
                                     house: house,
                                     onToggleStatus: { toggleStatus(house) },
+                                    onEdit: { houseToEdit = house },
                                     onDelete: { houseToDelete = house }
                                 )
                             }
@@ -272,7 +282,7 @@ struct HouseListView: View {
         }
     }
 
-    // MARK: - 右滑操作（切换状态 / 删除）
+    // MARK: - 左滑操作（切换状态 / 编辑 / 删除）
 
     private func toggleStatus(_ house: House) {
         house.status = house.status == .available ? .rented : .available
