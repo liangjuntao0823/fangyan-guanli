@@ -97,6 +97,7 @@ enum MediaStore {
 }
 
 // MARK: - 分享链接缓存（v1.18：同一房源的媒体与信息都没变化时，点分享直接复用上次链接，不再重复上传）
+// v1.21：缓存按「分享模式」双轨分开（脱敏 masked / 完整 full），两种分享互不影响、各自增量。
 
 /// 缓存的分享卡片记录：媒体清单 + 房源信息快照 + 上次生成的分享链接 + 当时的 COS 配置（换桶/换域名后自动失效）
 struct ShareCacheRecord: Codable {
@@ -116,19 +117,32 @@ enum ShareCacheStore {
         return dir
     }
 
-    private static func fileURL(roomKey: String) -> URL {
+    /// 按模式分文件：<房号>_masked.json / <房号>_full.json
+    private static func fileURL(roomKey: String, mode: String) -> URL {
+        directory.appendingPathComponent("\(roomKey)_\(mode).json")
+    }
+
+    /// 旧版单文件缓存（v1.18~1.20：<房号>.json，等价于现在的脱敏版缓存）
+    private static func legacyFileURL(roomKey: String) -> URL {
         directory.appendingPathComponent("\(roomKey).json")
     }
 
-    static func load(roomKey: String) -> ShareCacheRecord? {
-        let url = fileURL(roomKey: roomKey)
+    private static func decode(_ url: URL) -> ShareCacheRecord? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(ShareCacheRecord.self, from: data)
     }
 
-    static func save(roomKey: String, record: ShareCacheRecord) {
+    /// 按分享模式读取缓存；脱敏版优先读新模式文件，其次兼容旧版单文件（升级后第一次分享不重复上传）
+    static func load(roomKey: String, mode: String) -> ShareCacheRecord? {
+        let primary = fileURL(roomKey: roomKey, mode: mode)
+        if let record = decode(primary) { return record }
+        if mode == "masked", let record = decode(legacyFileURL(roomKey: roomKey)) { return record }
+        return nil
+    }
+
+    static func save(roomKey: String, mode: String, record: ShareCacheRecord) {
         if let data = try? JSONEncoder().encode(record) {
-            try? data.write(to: fileURL(roomKey: roomKey))
+            try? data.write(to: fileURL(roomKey: roomKey, mode: mode))
         }
     }
 }
