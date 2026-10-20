@@ -1,5 +1,7 @@
 import SwiftUI
 import Photos
+import AVFoundation
+import AVKit
 
 // MARK: - 主题
 
