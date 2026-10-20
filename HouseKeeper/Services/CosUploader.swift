@@ -133,6 +133,10 @@ enum CosUploader {
     ///   ②缓存按模式分文件（_masked / _full），互不影响、各自增量；升级后脱敏版兼容旧单文件缓存；
     ///   ③媒体排序视频置顶、图片单列（模板要求）；④名片姓名/电话来自设置页（可编辑）；
     ///   ⑤图片改 CSS 背景图渲染 + 全局禁右键/禁长按选择，视频 controlsList=nodownload（防保存下载）
+    /// - v1.22：①微信卡片描述：名字电话放在最底下一行（脱敏=位置行+名片行，完整=信息行+名片行）；
+    ///   ②完整版信息板块重排：第一行房号+户型、第二行租金+密码（密码：xxx）+房东（最右）、第三行备注；
+    ///   ③H5 图片点击放大后支持左右滑动切换上一张/下一张；④视频不自动播放（点击才播，preload=none）；
+    ///   ⑤户型标题去重（户型已含「上/下」时不再重复拼接房号后缀）
     /// 入参全部为值类型（ShareMediaFile / ShareHouseInfo），Task 内不触碰 SwiftData 模型，避免跨线程访问闪退
     static func shareCard(mediaFiles: [ShareMediaFile], roomKey: String, info: ShareHouseInfo, mode: ShareMode, config: CosConfig) async throws -> URL {
         guard !mediaFiles.isEmpty else { throw CosError.missingMedia }
@@ -179,7 +183,8 @@ enum CosUploader {
             }
             let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
             if item.kind == "video" {
-                videoTags.append("<video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"metadata\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
+                // v1.22：preload=none —— 视频不自动播放，点击才播（poster 仍显示首帧封面）
+                videoTags.append("<video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
             } else {
                 imageAbsURLs.append(absURL)
             }
@@ -211,9 +216,9 @@ enum CosUploader {
         let html: String
         switch mode {
         case .masked:
-            // 微信卡片：标题=户型（突出），描述=姓名-电话；页面隐藏房号/价格/房东
+            // 微信卡片：标题=户型（突出）；描述=位置行 + 名字电话行（最底下一行）
             let title = layoutTitle(info.layout, roomNo: info.displayRoomNo)
-            let desc = "\(name)-\(phone)"
+            let desc = "利保米兰公馆\n\(name)-\(phone)"
             html = buildMaskedHTML(
                 title: title, desc: desc,
                 name: name, phone: phone,
@@ -222,7 +227,7 @@ enum CosUploader {
             )
         case .full:
             let title = "\(info.displayRoomNo) · \(info.layout.isEmpty ? "房源" : info.layout)"
-            let desc = "\(info.priceText) · \(info.landlord.isEmpty ? "房东信息见页内" : info.landlord)"
+            let desc = "\(info.priceText) · \(info.landlord.isEmpty ? "房东信息见页内" : info.landlord)\n\(name)-\(phone)"
             html = buildFullHTML(
                 title: title, desc: desc,
                 info: info, name: name, phone: phone,
@@ -240,6 +245,96 @@ enum CosUploader {
             bucket: config.bucket,
             region: config.region,
             customDomain: config.customDomain
+        ))
+
+        return versionedURL
+    }
+
+    /// v1.22：多选分享 → 生成【合集 H5 卡片】。一次分享一个链接，好友点开看到 N 套房源列表，
+    /// 点某套进入该套详情（视频置顶、图片单列、名片底部）。脱敏/完整两模式各自独立合集页面与缓存。
+    /// 缓存：媒体+信息+配置全同 → 零上传复用上次链接；否则全量上传覆盖写（与单套共享媒体对象路径）。
+    static func shareCollection(rooms: [ShareCollectionItem], mode: ShareMode, config: CosConfig) async throws -> URL {
+        guard !config.customDomain.isEmpty else { throw CosError.customDomainMissing }
+        let validRooms = rooms.filter { !$0.mediaFiles.isEmpty }
+        guard !validRooms.isEmpty else { throw CosError.missingMedia }
+        let profile = loadShareProfile()
+        let name = profile.name
+        let phone = profile.phone
+
+        // 0. 集合缓存键：模式 + 房号排序拼接（房号变化 → 键变化 → 自动新链接）
+        let sortedKeys = validRooms.map { $0.roomKey }.sorted().joined(separator: "_")
+        let cacheKey = "collection_\(sortedKeys)"
+        let cacheMode = "collection-\(mode.rawValue)"
+        if let cached = ShareCacheStore.load(roomKey: cacheKey, mode: cacheMode),
+           cached.bucket == config.bucket,
+           cached.region == config.region,
+           (cached.customDomain ?? "") == config.customDomain,
+           cached.info.name == name,
+           cached.info.phone == phone,
+           cached.collectionRooms == validRooms,
+           let url = URL(string: cached.shareURL) {
+            return url
+        }
+
+        // 1. 上传每套媒体（覆盖写，与单套分享共享 h/<roomKey>/<name> 路径）+ 每套封面
+        var prepared: [PreparedRoom] = []
+        for item in validRooms {
+            let ordered = item.mediaFiles.sorted { lhs, rhs in
+                let l = lhs.kind == "video" ? 0 : 1
+                let r = rhs.kind == "video" ? 0 : 1
+                return l < r
+            }
+            var videoTags: [String] = []
+            var imageAbsURLs: [String] = []
+            for m in ordered {
+                let remotePath = "h/\(item.roomKey)/\(m.name)"
+                let url = MediaStore.url(for: m.name, roomKey: item.roomKey)
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                let data = try Data(contentsOf: url)
+                try await upload(data: data, to: remotePath, contentType: mimeType(for: m.kind), config: config)
+                let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
+                if m.kind == "video" {
+                    videoTags.append("<video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
+                } else {
+                    imageAbsURLs.append(absURL)
+                }
+            }
+            var coverSrc = imageAbsURLs.first ?? ""
+            if let firstImage = item.mediaFiles.first(where: { $0.kind == "image" }),
+               let coverData = makeCoverJPEG(from: MediaStore.url(for: firstImage.name, roomKey: item.roomKey)) {
+                let coverPath = "h/\(item.roomKey)/cover"
+                do {
+                    try await upload(data: coverData, to: coverPath, contentType: "image/jpeg", config: config)
+                    coverSrc = try presignedGetURL(for: coverPath, expires: shareLinkExpires, config: config).absoluteString
+                } catch {
+                }
+            }
+            prepared.append(PreparedRoom(item: item, videoTags: videoTags, imageURLs: imageAbsURLs, coverSrc: coverSrc))
+        }
+        guard !prepared.isEmpty else { throw CosError.missingMedia }
+
+        // 2. 生成并上传合集页
+        let collectionCover = prepared.first?.coverSrc ?? ""
+        let pagePath = "h/_collection/\(sortedKeys).\(mode.pageSuffix)"
+        let html = buildCollectionHTML(rooms: prepared, mode: mode, name: name, phone: phone, coverSrc: collectionCover)
+        try await upload(data: Data(html.utf8), to: pagePath, contentType: "text/html; charset=utf-8", config: config)
+
+        let shareURL = try presignedGetURL(for: pagePath, expires: shareLinkExpires, config: config)
+        let versionedURL = appendVersionParameter(shareURL, version: "\(Int(Date().timeIntervalSince1970))")
+
+        // 3. 更新集合缓存
+        ShareCacheStore.save(roomKey: cacheKey, mode: cacheMode, record: ShareCacheRecord(
+            mediaFiles: validRooms.flatMap { $0.mediaFiles },
+            info: ShareHouseInfo(
+                displayRoomNo: "", towerLabel: "", layout: "", statusLabel: "",
+                priceText: "", landlord: "", password: "", remark: "",
+                name: name, phone: phone
+            ),
+            shareURL: versionedURL.absoluteString,
+            bucket: config.bucket,
+            region: config.region,
+            customDomain: config.customDomain,
+            collectionRooms: validRooms
         ))
 
         return versionedURL
@@ -288,6 +383,7 @@ enum CosUploader {
         let mediaBlock = mediaBlockHTML(videoTags: videoTags, imageURLs: imageURLs)
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
         let urlMeta = shareLink.isEmpty ? "" : "<meta property=\"og:url\" content=\"\(shareLink)\">"
+        let galleryJS = imageURLs.map { "'\($0)'" }.joined(separator: ",")
         return """
         <!DOCTYPE html>
         <html lang="zh-CN">
@@ -323,6 +419,12 @@ enum CosUploader {
         .btn.copy{background:#f0f0f2;color:#1c1c1e;border:none;}
         .foot{text-align:center;color:#8e8e93;font-size:12px;padding:18px 0 26px;}
         #toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:rgba(0,0,0,.8);color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;z-index:999;display:none;}
+        #lb{position:fixed;inset:0;background:rgba(0,0,0,.95);z-index:999;display:none;}
+        #lbImg{position:absolute;inset:0;background-size:contain;background-position:center;background-repeat:no-repeat;}
+        #lbPrev{position:absolute;left:6px;top:50%;transform:translateY(-50%);color:#fff;font-size:44px;padding:10px 16px;cursor:pointer;user-select:none;}
+        #lbNext{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:#fff;font-size:44px;padding:10px 16px;cursor:pointer;user-select:none;}
+        #lbClose{position:absolute;top:12px;right:12px;color:#fff;font-size:26px;padding:10px;cursor:pointer;user-select:none;}
+        #lbCnt{position:absolute;bottom:22px;left:0;right:0;text-align:center;color:rgba(255,255,255,.85);font-size:14px;user-select:none;}
         </style>
         </head>
         <body oncontextmenu="return false">
@@ -348,8 +450,15 @@ enum CosUploader {
         <div class="foot">更多米兰优质房源请与我联系</div>
         </div>
         <div id="toast"></div>
+        <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
         <script>
-        function openImg(src){var d=document.createElement('div');d.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.95) url("'+src+'") no-repeat center/contain;z-index:999;';d.onclick=function(){d.remove()};document.body.appendChild(d);}
+        var GALLERY=[\(galleryJS)];var gi=0;
+        function openImg(i){gi=i;show();}
+        function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"')";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
+        function lbPrev(){gi=(gi-1+GALLERY.length)%GALLERY.length;show();}
+        function lbNext(){gi=(gi+1)%GALLERY.length;show();}
+        function lbClose(){document.getElementById('lb').style.display='none';}
+        var _sx=0;(function(){var d=document.getElementById('lb');d.addEventListener('touchstart',function(e){_sx=e.touches[0].clientX},{passive:true});d.addEventListener('touchend',function(e){var dx=e.changedTouches[0].clientX-_sx;if(Math.abs(dx)>50){dx<0?lbNext():lbPrev();}},{passive:true});})();
         function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(function(){t.style.display='none'},1600);}
         function copyPhone(){var p='\(phone)';function done(){toast('已复制 '+p)}function fb(){var i=document.createElement('input');i.value=p;document.body.appendChild(i);i.select();i.setSelectionRange(0,999);document.execCommand('copy');i.remove();done()}if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(p).then(done,fb)}else{fb()}}
         </script>
@@ -360,20 +469,18 @@ enum CosUploader {
 
     // MARK: - HTML 模板（v1.21 设计稿定稿：完整版）
 
-    /// 完整版（不隐藏版）：信息板块五行（房号+房东 / 价格+密码 / 户型 / 备注动态 / 无导航行）→ 实拍 → 名片 → 底栏
-    /// 第一行：左边房号（30px 粗体）+ 最右边房东名（18px，直接显示房东姓名，无「房东」两字）
-    /// 第二行：价格（22px 金色）+ 密码（18px）从左到右
-    /// 第三行：户型；第四行：备注（有才显示，空则整行隐藏）
+    /// 完整版（不隐藏版）：v1.22 信息板块重排为三行——第一行：房号(左) + 户型(右)；第二行：租金 + 密码（密码：xxx）+ 房东（最右）；
+    /// 第三行：备注（有才显示，空则整行隐藏）。实拍 → 名片 → 底栏
     private static func buildFullHTML(title: String, desc: String, info: ShareHouseInfo, name: String, phone: String, videoTags: [String], imageURLs: [String], coverSrc: String, shareLink: String) -> String {
         let mediaBlock = mediaBlockHTML(videoTags: videoTags, imageURLs: imageURLs)
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
         let urlMeta = shareLink.isEmpty ? "" : "<meta property=\"og:url\" content=\"\(shareLink)\">"
+        let galleryJS = imageURLs.map { "'\($0)'" }.joined(separator: ",")
 
         let host = info.landlord.isEmpty ? "" : "<span class=\"host\">\(escapeHTML(info.landlord))</span>"
-        let pw = info.password.isEmpty ? "" : "<span class=\"pw\">\(escapeHTML(info.password))</span>"
+        let pw = info.password.isEmpty ? "" : "<span class=\"pw\">密码：\(escapeHTML(info.password))</span>"
         let remarkLine = info.remark.isEmpty ? "" : "<div class=\"remark\">\(escapeHTML(info.remark))</div>"
-        let layoutLine = info.layout.isEmpty ? "" : "<div class=\"l3\">\(escapeHTML(info.layout))</div>"
-
+        let layoutText = info.layout.isEmpty ? "房源" : escapeHTML(info.layout)
         return """
         <!DOCTYPE html>
         <html lang="zh-CN">
@@ -391,12 +498,12 @@ enum CosUploader {
         .hero{background:linear-gradient(135deg,#1f3a5f,#2d5f8a);color:#fff;border-radius:16px;padding:20px 20px 16px;}
         .l1{display:flex;justify-content:space-between;align-items:baseline;}
         .room{font-size:30px;font-weight:700;}
-        .host{font-size:18px;color:rgba(255,255,255,.9);}
+        .layout2{font-size:18px;color:rgba(255,255,255,.9);}
         .l2{display:flex;align-items:baseline;gap:14px;margin-top:12px;}
         .price{font-size:22px;font-weight:700;color:#f5c46b;}
         .pw{font-size:18px;color:rgba(255,255,255,.9);}
-        .l3{margin-top:10px;font-size:15px;color:rgba(255,255,255,.92);}
-        .remark{margin-top:8px;font-size:13px;color:rgba(255,255,255,.7);}
+        .host{margin-left:auto;font-size:18px;color:rgba(255,255,255,.9);}
+        .remark{margin-top:10px;font-size:13px;color:rgba(255,255,255,.7);}
         .sec{font-size:15px;color:#3a3a3c;margin:18px 4px 10px;font-weight:600;}
         .media{background:#fff;border-radius:16px;padding:12px;}
         .media video{width:100%;border-radius:10px;display:block;margin-bottom:10px;background:#000;}
@@ -413,14 +520,19 @@ enum CosUploader {
         .btn.copy{background:#f0f0f2;color:#1c1c1e;border:none;}
         .foot{text-align:center;color:#8e8e93;font-size:12px;padding:18px 0 26px;}
         #toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:rgba(0,0,0,.8);color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;z-index:999;display:none;}
+        #lb{position:fixed;inset:0;background:rgba(0,0,0,.95);z-index:999;display:none;}
+        #lbImg{position:absolute;inset:0;background-size:contain;background-position:center;background-repeat:no-repeat;}
+        #lbPrev{position:absolute;left:6px;top:50%;transform:translateY(-50%);color:#fff;font-size:44px;padding:10px 16px;cursor:pointer;user-select:none;}
+        #lbNext{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:#fff;font-size:44px;padding:10px 16px;cursor:pointer;user-select:none;}
+        #lbClose{position:absolute;top:12px;right:12px;color:#fff;font-size:26px;padding:10px;cursor:pointer;user-select:none;}
+        #lbCnt{position:absolute;bottom:22px;left:0;right:0;text-align:center;color:rgba(255,255,255,.85);font-size:14px;user-select:none;}
         </style>
         </head>
         <body oncontextmenu="return false">
         <div class="wrap">
         <section class="hero">
-          <div class="l1"><span class="room">\(escapeHTML(info.displayRoomNo))</span>\(host)</div>
-          <div class="l2"><span class="price">\(escapeHTML(info.priceText))</span>\(pw)</div>
-          \(layoutLine)
+          <div class="l1"><span class="room">\(escapeHTML(info.displayRoomNo))</span><span class="layout2">\(layoutText)</span></div>
+          <div class="l2"><span class="price">\(escapeHTML(info.priceText))</span>\(pw)\(host)</div>
           \(remarkLine)
         </section>
         <h2 class="sec">实拍 · 点击放大</h2>
@@ -437,8 +549,15 @@ enum CosUploader {
         <div class="foot">更多米兰优质房源请与我联系</div>
         </div>
         <div id="toast"></div>
+        <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
         <script>
-        function openImg(src){var d=document.createElement('div');d.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.95) url("'+src+'") no-repeat center/contain;z-index:999;';d.onclick=function(){d.remove()};document.body.appendChild(d);}
+        var GALLERY=[\(galleryJS)];var gi=0;
+        function openImg(i){gi=i;show();}
+        function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"')";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
+        function lbPrev(){gi=(gi-1+GALLERY.length)%GALLERY.length;show();}
+        function lbNext(){gi=(gi+1)%GALLERY.length;show();}
+        function lbClose(){document.getElementById('lb').style.display='none';}
+        var _sx=0;(function(){var d=document.getElementById('lb');d.addEventListener('touchstart',function(e){_sx=e.touches[0].clientX},{passive:true});d.addEventListener('touchend',function(e){var dx=e.changedTouches[0].clientX-_sx;if(Math.abs(dx)>50){dx<0?lbNext():lbPrev();}},{passive:true});})();
         function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(function(){t.style.display='none'},1600);}
         function copyPhone(){var p='\(phone)';function done(){toast('已复制 '+p)}function fb(){var i=document.createElement('input');i.value=p;document.body.appendChild(i);i.select();i.setSelectionRange(0,999);document.execCommand('copy');i.remove();done()}if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(p).then(done,fb)}else{fb()}}
         </script>
@@ -447,22 +566,214 @@ enum CosUploader {
         """
     }
 
-    /// 媒体块：视频标签原样输出（置顶），图片渲染为背景图 div（单列、防长按保存、点击放大）
+    // MARK: - v1.22 合集 H5（多选分享：一次链接，N 套房源列表 + 各自详情）
+
+    /// 合集页：列表（封面+房号+租金+户型）→ 点某套进入详情（视频置顶、图片单列、名片在详情底部）；
+    /// 脱敏/完整按模式渲染详情信息区。所有图片进入统一 GALLERY 支持左右滑动查看。
+    private struct PreparedRoom {
+        let item: ShareCollectionItem
+        let videoTags: [String]
+        let imageURLs: [String]
+        let coverSrc: String
+    }
+
+    private static func buildCollectionHTML(rooms: [PreparedRoom], mode: ShareMode, name: String, phone: String, coverSrc: String) -> String {
+        let count = rooms.count
+        // og
+        let title: String
+        let desc: String
+        switch mode {
+        case .masked:
+            title = "米兰公馆 · \(count)套房源"
+            desc = "利保米兰公馆\n\(name)-\(phone)"
+        case .full:
+            let minPrice = rooms.map { $0.item.priceText }.min() ?? ""
+            title = "米兰公馆 · \(count)套房源"
+            desc = (minPrice.isEmpty ? "精选\(count)套房源" : "精选\(count)套房源 · 起租\(minPrice)") + "\n\(name)-\(phone)"
+        }
+        let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
+
+        // 列表项
+        var listItems: [String] = []
+        var detailsJS: [String] = []
+        var gallery: [String] = []
+        var cursor = 0
+        for (index, room) in rooms.enumerated() {
+            let cover = room.coverSrc.isEmpty ? "" : " style=\"background-image:url('\(room.coverSrc)')\""
+            listItems.append("""
+            <div class="item" onclick="showDetail(\(index))">
+              <div class="thumb"\(cover)></div>
+              <div class="meta">
+                <div class="rno">\(escapeHTML(room.item.displayRoomNo))</div>
+                <div class="sub2">\(escapeHTML(room.item.priceText)) · \(escapeHTML(room.item.layout.isEmpty ? "房源" : room.item.layout))</div>
+              </div>
+            </div>
+            """)
+
+            let detail = collectionDetailHTML(item: room.item, mode: mode, videoTags: room.videoTags, imageURLs: room.imageURLs, startIndex: cursor)
+            cursor += room.imageURLs.count
+            gallery.append(contentsOf: room.imageURLs)
+            // JS 单引号字符串转义：反斜杠 → \\ 、单引号 → \' 、换行 → \n（JS 字符串字面量不允许未转义换行）
+            let escaped = detail
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+                .replacingOccurrences(of: "\n", with: "\\n")
+            detailsJS.append("'" + escaped + "'")
+        }
+        let galleryJS = gallery.map { "'\($0)'" }.joined(separator: ",")
+        let itemsHTML = listItems.joined(separator: "\n")
+        let roomsJS = detailsJS.joined(separator: ",")
+
+        return """
+        <!DOCTYPE html>
+        <html lang="zh-CN">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta property="og:title" content="\(escapeHTML(title))">
+        <meta property="og:description" content="\(escapeHTML(desc))">
+        \(coverMeta)
+        <title>\(escapeHTML(title))</title>
+        <style>
+        body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;margin:0;background:#f4f5f7;color:#1c1c1e;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;}
+        .wrap{max-width:640px;margin:0 auto;padding:0 16px 16px;}
+        .hero2{background:linear-gradient(135deg,#1f3a5f,#2d5f8a);color:#fff;border-radius:16px;padding:20px;margin-top:14px;}
+        .coll-title{font-size:26px;font-weight:700;margin:0 0 8px;}
+        .coll-sub{font-size:14px;color:rgba(255,255,255,.85);}
+        .items{margin-top:12px;}
+        .item{display:flex;gap:12px;background:#fff;border-radius:14px;padding:12px;margin-bottom:10px;align-items:center;}
+        .thumb{width:96px;height:72px;border-radius:10px;background-size:cover;background-position:center;background-color:#e8e8ec;flex-shrink:0;}
+        .meta{flex:1;min-width:0;}
+        .rno{font-size:17px;font-weight:700;color:#1c1c1e;}
+        .sub2{font-size:13px;color:#8e8e93;margin-top:4px;}
+        .back{display:block;width:100%;padding:12px 0;border-radius:999px;font-size:15px;font-weight:600;text-align:center;background:#fff;color:#1f3a5f;border:1px solid #dfe1e6;margin:14px 0 4px;text-decoration:none;}
+        .dhero{background:linear-gradient(135deg,#1f3a5f,#2d5f8a);color:#fff;border-radius:16px;padding:20px 20px 16px;margin-top:14px;}
+        .type{font-size:30px;font-weight:700;margin:0 0 14px;}
+        .loc{display:flex;align-items:center;gap:8px;color:rgba(255,255,255,.92);text-decoration:none;}
+        .loc-name{font-size:15px;}
+        .nav-pill{display:inline-flex;align-items:center;gap:4px;background:rgba(255,255,255,.18);border-radius:999px;padding:6px 12px;font-size:13px;margin-left:auto;}
+        .l1{display:flex;justify-content:space-between;align-items:baseline;}
+        .room{font-size:30px;font-weight:700;}
+        .layout2{font-size:18px;color:rgba(255,255,255,.9);}
+        .l2{display:flex;align-items:baseline;gap:14px;margin-top:12px;}
+        .price{font-size:22px;font-weight:700;color:#f5c46b;}
+        .pw{font-size:18px;color:rgba(255,255,255,.9);}
+        .host{margin-left:auto;font-size:18px;color:rgba(255,255,255,.9);}
+        .remark{margin-top:10px;font-size:13px;color:rgba(255,255,255,.7);}
+        .sec{font-size:15px;color:#3a3a3c;margin:18px 4px 10px;font-weight:600;}
+        .media{background:#fff;border-radius:16px;padding:12px;}
+        .media video{width:100%;border-radius:10px;display:block;margin-bottom:10px;background:#000;}
+        .cell{width:100%;aspect-ratio:4/3;border-radius:10px;background-size:cover;background-position:center;background-color:#e8e8ec;margin-bottom:10px;}
+        .card{background:#fff;border-radius:16px;padding:16px;margin-top:12px;text-align:center;}
+        .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
+        .row{display:flex;align-items:center;justify-content:center;gap:8px;}
+        .name{font-size:17px;font-weight:600;}
+        .num{font-size:16px;font-weight:600;color:#b8860b;}
+        .note{color:#8e8e93;font-size:12px;margin:10px 0 14px;}
+        .btns{display:flex;gap:10px;justify-content:center;}
+        .btn{flex:1;max-width:220px;padding:12px 0;border-radius:999px;font-size:15px;font-weight:600;text-align:center;text-decoration:none;}
+        .btn.call{background:#1f3a5f;color:#fff;}
+        .btn.copy{background:#f0f0f2;color:#1c1c1e;border:none;}
+        .foot{text-align:center;color:#8e8e93;font-size:12px;padding:18px 0 26px;}
+        #toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:rgba(0,0,0,.8);color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;z-index:999;display:none;}
+        #lb{position:fixed;inset:0;background:rgba(0,0,0,.95);z-index:999;display:none;}
+        #lbImg{position:absolute;inset:0;background-size:contain;background-position:center;background-repeat:no-repeat;}
+        #lbPrev{position:absolute;left:6px;top:50%;transform:translateY(-50%);color:#fff;font-size:44px;padding:10px 16px;cursor:pointer;user-select:none;}
+        #lbNext{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:#fff;font-size:44px;padding:10px 16px;cursor:pointer;user-select:none;}
+        #lbClose{position:absolute;top:12px;right:12px;color:#fff;font-size:26px;padding:10px;cursor:pointer;user-select:none;}
+        #lbCnt{position:absolute;bottom:22px;left:0;right:0;text-align:center;color:rgba(255,255,255,.85);font-size:14px;user-select:none;}
+        </style>
+        </head>
+        <body oncontextmenu="return false">
+        <div class="wrap">
+        <div id="listView">
+          <div class="hero2">
+            <h1 class="coll-title">\(escapeHTML(title))</h1>
+            <div class="coll-sub">点击房源卡片查看详情</div>
+          </div>
+          <div class="items">
+        \(itemsHTML)
+          </div>
+          <div class="foot">更多米兰优质房源请与我联系</div>
+        </div>
+        <div id="detailView" style="display:none">
+          <button class="back" type="button" onclick="showList()">‹ 返回房源列表</button>
+          <div id="detailBody"></div>
+          <button class="back" type="button" onclick="showList()">返回房源列表</button>
+        </div>
+        </div>
+        <div id="toast"></div>
+        <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
+        <script>
+        var GALLERY=[\(galleryJS)];var gi=0;
+        var ROOMS=[\(roomsJS)];
+        function showDetail(i){document.getElementById('listView').style.display='none';document.getElementById('detailView').style.display='block';document.getElementById('detailBody').innerHTML=ROOMS[i];window.scrollTo(0,0);}
+        function showList(){document.getElementById('detailView').style.display='none';document.getElementById('listView').style.display='block';window.scrollTo(0,0);}
+        function openImg(i){gi=i;show();}
+        function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"')";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
+        function lbPrev(){gi=(gi-1+GALLERY.length)%GALLERY.length;show();}
+        function lbNext(){gi=(gi+1)%GALLERY.length;show();}
+        function lbClose(){document.getElementById('lb').style.display='none';}
+        var _sx=0;(function(){var d=document.getElementById('lb');d.addEventListener('touchstart',function(e){_sx=e.touches[0].clientX},{passive:true});d.addEventListener('touchend',function(e){var dx=e.changedTouches[0].clientX-_sx;if(Math.abs(dx)>50){dx<0?lbNext():lbPrev();}},{passive:true});})();
+        function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(function(){t.style.display='none'},1600);}
+        function copyPhone(){var p='\(phone)';function done(){toast('已复制 '+p)}function fb(){var i=document.createElement('input');i.value=p;document.body.appendChild(i);i.select();i.setSelectionRange(0,999);document.execCommand('copy');i.remove();done()}if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(p).then(done,fb)}else{fb()}}
+        </script>
+        </body>
+        </html>
+        """
+    }
+
+    /// 合集单套详情 HTML：脱敏=户型+导航；完整=房号+户型 / 价格+密码+房东 / 备注。媒体：视频置顶、图片单列。
+    private static func collectionDetailHTML(item: ShareCollectionItem, mode: ShareMode, videoTags: [String], imageURLs: [String], startIndex: Int) -> String {
+        var parts: [String] = []
+        parts.append("<div class=\"dhero\">")
+        if mode == .masked {
+            parts.append("<div class=\"type\">\(escapeHTML(item.layout.isEmpty ? "房源" : item.layout))</div>")
+            parts.append("""
+            <a class="loc" href="https://uri.amap.com/search?keyword=%E5%88%A9%E4%BF%9D%E7%B1%B3%E5%85%B0%E5%85%AC%E5%AF%93" target="_blank" rel="noopener">
+              <span class="loc-name">利保米兰公馆</span>
+              <span class="nav-pill">导航</span>
+            </a>
+            """)
+        } else {
+            parts.append("<div class=\"l1\"><span class=\"room\">\(escapeHTML(item.displayRoomNo))</span><span class=\"layout2\">\(escapeHTML(item.layout.isEmpty ? "房源" : item.layout))</span></div>")
+            var l2 = "<div class=\"l2\"><span class=\"price\">\(escapeHTML(item.priceText))</span>"
+            if !item.password.isEmpty { l2 += "<span class=\"pw\">密码：\(escapeHTML(item.password))</span>" }
+            if !item.landlord.isEmpty { l2 += "<span class=\"host\">\(escapeHTML(item.landlord))</span>" }
+            l2 += "</div>"
+            parts.append(l2)
+            if !item.remark.isEmpty { parts.append("<div class=\"remark\">\(escapeHTML(item.remark))</div>") }
+        }
+        parts.append("</div>")
+        var media = "<h2 class=\"sec\">实拍 · 点击放大</h2><div class=\"media\">"
+        for tag in videoTags { media += tag }
+        for (offset, url) in imageURLs.enumerated() {
+            media += "<div class=\"cell\" style=\"background-image:url('\(url)')\" onclick=\"openImg(\(startIndex + offset))\"></div>"
+        }
+        media += "</div>"
+        parts.append(media)
+        return parts.joined(separator: "")
+    }
+
+    /// 媒体块：视频标签原样输出（置顶），图片渲染为背景图 div（单列、防长按保存、点击放大进 GALLERY）
     private static func mediaBlockHTML(videoTags: [String], imageURLs: [String]) -> String {
         var parts: [String] = []
         for tag in videoTags { parts.append(tag) }
-        for url in imageURLs {
-            parts.append("<div class=\"cell\" style=\"background-image:url('\(url)')\" onclick=\"openImg('\(url)')\"></div>")
+        for (index, url) in imageURLs.enumerated() {
+            parts.append("<div class=\"cell\" style=\"background-image:url('\(url)')\" onclick=\"openImg(\(index))\"></div>")
         }
         guard !parts.isEmpty else { return "" }
         return "<div class=\"media\">" + parts.joined(separator: "") + "</div>"
     }
 
     /// 户型标题：户型 + 房号中的上下层后缀（如「单间 · 上层」）；无后缀只显示户型
+    /// v1.22：户型本身已含「上/下」后缀（如「单间下层」）时不再重复拼接，避免「单间下层 · 下」
     private static func layoutTitle(_ layout: String, roomNo: String) -> String {
         let suffix = roomNo.filter { !$0.isNumber && $0 != "-" && $0 != " " && $0 != "." && $0 != "/" }
         var title = layout.isEmpty ? "房源" : layout
-        if !suffix.isEmpty { title += " · " + suffix }
+        if !suffix.isEmpty, !title.contains(suffix) {
+            title += " · " + suffix
+        }
         return title
     }
 
@@ -627,4 +938,20 @@ enum CosUploader {
         let data = Data(hexString.utf8)
         return Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
+}
+
+// MARK: - v1.22 合集分享值类型
+
+/// 多选分享合集里的单套房源数据（值类型，Task 内安全传递 + 集合缓存 JSON 编解码）
+struct ShareCollectionItem: Hashable, Codable {
+    let roomKey: String
+    let displayRoomNo: String
+    let towerLabel: String
+    let layout: String
+    let statusLabel: String
+    let priceText: String
+    let landlord: String
+    let password: String
+    let remark: String
+    let mediaFiles: [ShareMediaFile]
 }
