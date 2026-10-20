@@ -42,8 +42,8 @@ struct HouseDetailView: View {
             HouseEditView(house: house)
         }
         .sheet(isPresented: $showShare) {
+            // 注意：UIActivityViewController 不能加 presentationDetents，否则弹分享面板会闪退
             ShareSheet(items: shareItems)
-                .presentationDetents([.medium, .large])
         }
         .confirmationDialog("切换房源状态", isPresented: $showStatusConfirm, titleVisibility: .visible) {
             if house.status == .available {
