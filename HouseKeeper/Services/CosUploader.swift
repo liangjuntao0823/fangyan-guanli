@@ -92,33 +92,40 @@ enum CosUploader {
         }
     }
 
-    /// 为房源生成 H5 分享卡片：上传所有媒体 → 生成 index.html → 上传 → 返回长期有效的链接
+    /// 为房源生成 H5 分享卡片：上传所有媒体 → 生成 index.html（og 标签用绝对 URL）→ 上传 → 返回长期有效的链接
     /// 入参全部为值类型（ShareMediaFile / ShareHouseInfo），Task 内不触碰 SwiftData 模型，避免跨线程访问闪退
+    /// v1.17：页面内图片/视频 src、og:image、og:url 全部使用【绝对签名 URL】（10 年有效），
+    /// 微信抓取 og 标签时能解析到封面图，才能把链接渲染成「网页卡片」（此前 og:image 用相对路径，微信无法解析，卡片生成失败）
     static func shareCard(mediaFiles: [ShareMediaFile], roomKey: String, info: ShareHouseInfo, config: CosConfig) async throws -> URL {
         guard !mediaFiles.isEmpty else { throw CosError.missingMedia }
 
-        // 1. 逐个上传媒体
+        // 1. 逐个上传媒体，并生成每个媒体的绝对 GET 签名 URL（供 HTML 内 src / og:image 使用）
         var mediaTags: [String] = []
+        var imageAbsURLs: [String] = []   // 图片的绝对 URL 列表，第一张作为 og:image 封面
         for item in mediaFiles {
             let url = MediaStore.url(for: item.name, roomKey: roomKey)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             let data = try Data(contentsOf: url)
             let remotePath = "h/\(roomKey)/\(item.name)"
             try await upload(data: data, to: remotePath, contentType: mimeType(for: item.kind), config: config)
+            let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
             if item.kind == "video" {
-                mediaTags.append("<video class=\"v\" controls playsinline preload=\"metadata\" poster=\"\(remotePath)\" src=\"\(remotePath)\"></video>")
+                mediaTags.append("<video class=\"v\" controls playsinline preload=\"metadata\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
             } else {
-                mediaTags.append("<img class=\"p\" src=\"\(remotePath)\">")
+                mediaTags.append("<img class=\"p\" src=\"\(absURL)\">")
+                imageAbsURLs.append(absURL)
             }
         }
         guard !mediaTags.isEmpty else { throw CosError.missingMedia }
 
-        // 2. 生成 index.html（带 og 标签，微信抓取卡片）
+        // 2. 生成 index.html（og 标签用绝对 URL，微信抓取卡片）
         let title = "\(info.displayRoomNo) · \(info.layout.isEmpty ? "房源" : info.layout)"
         let desc = "\(info.priceText) · \(info.landlord.isEmpty ? "房东信息见页内" : info.landlord)"
-        // 封面用第一张图（og:image 用与页面相同的长期有效 URL，微信能持续抓取到封面）
-        let cover = mediaTags.first { $0.contains("img") } ?? ""
-        let coverSrc = cover.isEmpty ? "" : extractSrc(from: cover)
+        let htmlPath = "h/\(roomKey)/index.html"
+        try await upload(data: Data(), to: htmlPath, contentType: "text/html; charset=utf-8", config: config)
+        // 上传 index.html 后生成分享链接（10 年有效）
+        let shareURL = try presignedGetURL(for: htmlPath, expires: shareLinkExpires, config: config)
+        let shareLink = shareURL.absoluteString
 
         let html = buildHTML(
             title: title,
@@ -132,25 +139,18 @@ enum CosUploader {
             password: info.password,
             remark: info.remark,
             mediaTags: mediaTags,
-            coverSrc: coverSrc
+            coverSrc: imageAbsURLs.first ?? "",
+            shareLink: shareLink
         )
         let htmlData = Data(html.utf8)
-        let htmlPath = "h/\(roomKey)/index.html"
         try await upload(data: htmlData, to: htmlPath, contentType: "text/html; charset=utf-8", config: config)
 
-        // 3. 返回 index.html 的长期有效 GET 预签名 URL
-        return try presignedGetURL(for: htmlPath, expires: shareLinkExpires, config: config)
-    }
-
-    private static func extractSrc(from tag: String) -> String {
-        guard let start = tag.range(of: "src=\"")?.upperBound else { return "" }
-        guard let end = tag[start...].range(of: "\"")?.lowerBound else { return "" }
-        return String(tag[start..<end])
+        return shareURL
     }
 
     // MARK: - HTML 模板
 
-    private static func buildHTML(title: String, desc: String, roomNo: String, towerLabel: String, layout: String, statusLabel: String, priceText: String, landlord: String, password: String, remark: String, mediaTags: [String], coverSrc: String) -> String {
+    private static func buildHTML(title: String, desc: String, roomNo: String, towerLabel: String, layout: String, statusLabel: String, priceText: String, landlord: String, password: String, remark: String, mediaTags: [String], coverSrc: String, shareLink: String) -> String {
         let hero = """
         <div class="hero">
           <div class="badge">\(escapeHTML(statusLabel))</div>
@@ -167,7 +167,9 @@ enum CosUploader {
         </div>
         """
         let grid = "<div class=\"grid\">" + mediaTags.joined(separator: "") + "</div>"
+        // og:image / og:url 必须用绝对 URL，微信服务端才能抓取到封面并渲染成卡片
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
+        let urlMeta = "<meta property=\"og:url\" content=\"\(shareLink)\">"
         return """
         <!DOCTYPE html>
         <html lang="zh-CN">
@@ -177,6 +179,7 @@ enum CosUploader {
         <meta property="og:title" content="\(escapeHTML(title))">
         <meta property="og:description" content="\(escapeHTML(desc))">
         \(coverMeta)
+        \(urlMeta)
         <title>\(escapeHTML(title))</title>
         <style>
         body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;margin:0;background:#f4f5f7;color:#1c1c1e;}
