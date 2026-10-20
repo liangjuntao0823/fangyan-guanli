@@ -37,10 +37,11 @@ struct StatusBadge: View {
     }
 }
 
-// MARK: - 视频首帧缩略图（异步提取第一帧，避免灰色占位）
+// MARK: - 视频首帧缩略图（异步提取第一帧，避免灰色占位；fit=true 时完整显示不裁切，竖版视频保持竖版比例，一眼可辨是视频）
 
 struct VideoThumbnailView: View {
     let url: URL
+    var fit: Bool = false
     @State private var thumbnail: UIImage?
 
     var body: some View {
@@ -48,7 +49,8 @@ struct VideoThumbnailView: View {
             if let thumbnail {
                 Image(uiImage: thumbnail)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ZStack {
                     Color.gray.opacity(0.2)
@@ -64,7 +66,7 @@ struct VideoThumbnailView: View {
         let asset = AVAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 640, height: 640)
+        generator.maximumSize = CGSize(width: 1280, height: 1280)
         let time = CMTime(seconds: 0.1, preferredTimescale: 600)
         generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, _, _ in
             guard let cgImage else { return }
@@ -75,16 +77,17 @@ struct VideoThumbnailView: View {
     }
 }
 
-// MARK: - 媒体缩略图
+// MARK: - 媒体缩略图（videoFit=true 用于详情页视频条目：竖版视频完整显示，不再裁成横图被误认成图片）
 
 struct MediaThumbView: View {
     let media: MediaItem
     let roomKey: String
+    var videoFit: Bool = false
 
     var body: some View {
         if media.kind == "video" {
             ZStack {
-                VideoThumbnailView(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
+                VideoThumbnailView(url: MediaStore.url(for: media.fileName, roomKey: roomKey), fit: videoFit)
                 // 播放三角：缩小 + 半透明，不遮挡画面
                 Image(systemName: "play.fill")
                     .font(.system(size: 20))
@@ -235,88 +238,7 @@ struct HouseCardView: View {
     }
 }
 
-// MARK: - 可左滑卡片（手指向左滑动卡片，露出右侧「编辑 / 已租 / 删除」按钮）
-
-struct SwipeableHouseCard: View {
-    let house: House
-    let onToggleStatus: () -> Void
-    let onEdit: () -> Void
-    let onDelete: () -> Void
-
-    @State private var offset: CGFloat = 0
-    private let actionWidth: CGFloat = 64
-    private var maxOffset: CGFloat { actionWidth * 3 }
-
-    var body: some View {
-        ZStack(alignment: .trailing) {
-            // 底层操作按钮（卡片向左滑开后露出）：编辑 | 已租/待租 | 删除
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                actionButton(
-                    title: "编辑",
-                    icon: "pencil",
-                    color: AppTheme.primary,
-                    action: onEdit
-                )
-                actionButton(
-                    title: house.status == .available ? "已租" : "待租",
-                    icon: house.status == .available ? "checkmark" : "arrow.uturn.backward",
-                    color: Color(red: 0.24, green: 0.58, blue: 0.34),
-                    action: onToggleStatus
-                )
-                actionButton(
-                    title: "删除",
-                    icon: "trash",
-                    color: Color.red,
-                    action: onDelete
-                )
-            }
-            .frame(maxHeight: .infinity)
-
-            HouseCardView(house: house)
-                .offset(x: offset)
-                .gesture(
-                    DragGesture()
-                        .onChanged { value in
-                            if value.translation.width < 0 {
-                                // 左滑：露出右侧操作按钮
-                                offset = max(value.translation.width, -maxOffset)
-                            } else if offset < 0 {
-                                // 右滑：收回卡片
-                                offset = min(offset + value.translation.width, 0)
-                            }
-                        }
-                        .onEnded { value in
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                offset = value.translation.width < -actionWidth ? -maxOffset : 0
-                            }
-                        }
-                )
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func actionButton(title: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { offset = 0 }
-            action()
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.body.weight(.semibold))
-                Text(title)
-                    .font(.footnote.weight(.semibold))
-            }
-            .foregroundColor(.white)
-            .frame(width: actionWidth)
-            .frame(maxHeight: .infinity)
-            .background(color)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - 详情页视频条目（缩略图 + 播放三角，点击全屏播放，播放界面长按可保存视频到相册）
+// MARK: - 详情页视频条目（缩略图 + 播放三角，点击全屏播放；videoFit 保持竖版比例完整显示首帧，避免被误认成图片）
 
 struct HouseDetailVideoItem: View {
     let media: MediaItem
@@ -327,7 +249,10 @@ struct HouseDetailVideoItem: View {
         Button {
             playing = true
         } label: {
-            MediaThumbView(media: media, roomKey: roomKey)
+            ZStack {
+                Color.black.opacity(0.06)
+                MediaThumbView(media: media, roomKey: roomKey, videoFit: true)
+            }
         }
         .buttonStyle(.plain)
         .fullScreenCover(isPresented: $playing) {

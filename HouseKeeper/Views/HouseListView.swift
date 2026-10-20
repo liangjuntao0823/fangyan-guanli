@@ -10,10 +10,8 @@ struct HouseListView: View {
     @State private var statusFilter: HouseStatus? = .available   // 首页默认显示待租房源
     @State private var layoutFilter: String? = nil
     @State private var showAdd = false
-    @State private var houseToEdit: House?
-    @State private var houseToDelete: House?
 
-    /// 当前 App 版本号（读自工程配置，如 1.9）
+    /// 当前 App 版本号（读自工程配置，如 1.11）
     private var appVersion: String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
     }
@@ -86,26 +84,6 @@ struct HouseListView: View {
             }
             .sheet(isPresented: $showAdd) {
                 HouseEditView(house: nil)
-            }
-            .sheet(isPresented: Binding(
-                get: { houseToEdit != nil },
-                set: { if !$0 { houseToEdit = nil } }
-            )) {
-                if let h = houseToEdit {
-                    HouseEditView(house: h)
-                }
-            }
-            .confirmationDialog("删除这套房源？", isPresented: Binding(
-                get: { houseToDelete != nil },
-                set: { if !$0 { houseToDelete = nil } }
-            ), titleVisibility: .visible) {
-                Button("删除房源", role: .destructive) {
-                    if let h = houseToDelete { deleteHouse(h) }
-                    houseToDelete = nil
-                }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text("将同时删除该房源的照片和视频，且无法恢复。")
             }
         }
     }
@@ -265,7 +243,7 @@ struct HouseListView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 列表（左滑卡片露出 编辑/已租/删除 按钮）
+    // MARK: - 列表（点击卡片进入详情；已删除左滑菜单，编辑/已租/删除在详情页操作）
 
     private var houseList: some View {
         Group {
@@ -288,12 +266,7 @@ struct HouseListView: View {
                             NavigationLink {
                                 HouseDetailView(house: house)
                             } label: {
-                                SwipeableHouseCard(
-                                    house: house,
-                                    onToggleStatus: { toggleStatus(house) },
-                                    onEdit: { houseToEdit = house },
-                                    onDelete: { houseToDelete = house }
-                                )
+                                HouseCardView(house: house)
                             }
                             .buttonStyle(.plain)
                         }
@@ -303,20 +276,6 @@ struct HouseListView: View {
                 }
             }
         }
-    }
-
-    // MARK: - 左滑操作（切换状态 / 编辑 / 删除）
-
-    private func toggleStatus(_ house: House) {
-        house.status = house.status == .available ? .rented : .available
-        house.updatedAt = Date()
-        try? modelContext.save()
-    }
-
-    private func deleteHouse(_ house: House) {
-        MediaStore.deleteAll(files: house.mediaItems.map(\.fileName), roomKey: house.mediaRoomKey)
-        modelContext.delete(house)
-        try? modelContext.save()
     }
 }
 

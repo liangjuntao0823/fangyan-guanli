@@ -204,7 +204,7 @@ struct HouseDetailView: View {
                                     toggleSelect(media)
                                 }
                         } else {
-                            // 视频条目：缩略图 + 播放三角，点击全屏播放
+                            // 视频条目：缩略图 + 播放三角（竖版视频完整显示首帧，不再被误认成图片），点击全屏播放
                             HouseDetailVideoItem(media: media, roomKey: house.mediaRoomKey)
                                 .frame(height: 200)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -395,15 +395,34 @@ struct HouseDetailView: View {
     }
 
     /// 分享：生成 H5 卡片链接（上传照片视频到腾讯云 COS），系统分享面板发出链接
+    /// 注意：Task 内只传值类型（fileName/kind 数组 + 字符串字段），绝不直接访问 SwiftData @Model，
+    /// 否则跨线程读取模型会闪退（分享闪退修复根因）
     private func shareHouseCard() {
         guard let config = CosConfig.load(), config.isValid else {
             shareError = "请先在首页左上角「设置」里填写云存储配置（腾讯云 COS），再分享卡片链接"
             return
         }
+        // 先在主线程把所有需要的数据拷成值类型，Task 里不再触碰 SwiftData 模型
+        let files = house.mediaItems.map { ShareMediaFile(name: $0.fileName, kind: $0.kind) }
+        let roomKey = house.mediaRoomKey
+        let info = ShareHouseInfo(
+            displayRoomNo: house.displayRoomNo,
+            towerLabel: house.towerLabel,
+            layout: house.layout,
+            statusLabel: house.status.label,
+            priceText: house.priceText,
+            landlord: house.landlord,
+            password: house.password,
+            remark: house.remark
+        )
+        guard !files.isEmpty else {
+            shareError = "这套房源还没有照片或视频，先编辑添加素材再分享"
+            return
+        }
         isSharing = true
         Task {
             do {
-                let url = try await CosUploader.shareCard(for: house, config: config)
+                let url = try await CosUploader.shareCard(mediaFiles: files, roomKey: roomKey, info: info, config: config)
                 await MainActor.run {
                     isSharing = false
                     shareItems = [url]
@@ -417,6 +436,24 @@ struct HouseDetailView: View {
             }
         }
     }
+}
+
+// MARK: - 分享值类型（Task 内安全传递，不触碰 SwiftData 模型）
+
+struct ShareMediaFile: Equatable {
+    let name: String
+    let kind: String
+}
+
+struct ShareHouseInfo: Equatable {
+    let displayRoomNo: String
+    let towerLabel: String
+    let layout: String
+    let statusLabel: String
+    let priceText: String
+    let landlord: String
+    let password: String
+    let remark: String
 }
 
 // MARK: - 照片大图预览路由
