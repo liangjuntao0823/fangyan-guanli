@@ -98,13 +98,14 @@ enum MediaStore {
 
 // MARK: - 分享链接缓存（v1.18：同一房源的媒体与信息都没变化时，点分享直接复用上次链接，不再重复上传）
 
-/// 缓存的分享卡片记录：媒体清单 + 房源信息快照 + 上次生成的分享链接 + 当时的 COS 配置（换桶后自动失效）
+/// 缓存的分享卡片记录：媒体清单 + 房源信息快照 + 上次生成的分享链接 + 当时的 COS 配置（换桶/换域名后自动失效）
 struct ShareCacheRecord: Codable {
     let mediaFiles: [ShareMediaFile]
     let info: ShareHouseInfo
     let shareURL: String
     let bucket: String
     let region: String
+    let customDomain: String?   // v1.19：生成链接时的自定义域名；换域名后旧缓存自动失效（Optional 兼容旧版缓存 JSON）
 }
 
 enum ShareCacheStore {

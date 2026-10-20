@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import Security
+import UIKit
 
 // MARK: - 钥匙串存取（COS 密钥等敏感配置）
 
@@ -9,6 +10,7 @@ enum KeychainKey {
     static let region = "cos.region"
     static let secretId = "cos.secretId"
     static let secretKey = "cos.secretKey"
+    static let customDomain = "cos.customDomain"   // v1.19：自定义域名（可空），空 = 用 COS 默认域名
 }
 
 enum KeychainStore {
@@ -48,6 +50,7 @@ struct CosConfig {
     let region: String
     let secretId: String
     let secretKey: String
+    let customDomain: String   // v1.19：自定义域名（如 share.fangyuan88.top），空 = 用默认域名
 
     var isValid: Bool {
         !bucket.isEmpty && !region.isEmpty && !secretId.isEmpty && !secretKey.isEmpty
@@ -60,7 +63,8 @@ struct CosConfig {
         let region = (KeychainStore.load(KeychainKey.region) ?? "").trimmingCharacters(in: trimSet)
         let secretId = (KeychainStore.load(KeychainKey.secretId) ?? "").trimmingCharacters(in: trimSet)
         let secretKey = (KeychainStore.load(KeychainKey.secretKey) ?? "").trimmingCharacters(in: trimSet)
-        let config = CosConfig(bucket: bucket, region: region, secretId: secretId, secretKey: secretKey)
+        let customDomain = (KeychainStore.load(KeychainKey.customDomain) ?? "").trimmingCharacters(in: trimSet)
+        let config = CosConfig(bucket: bucket, region: region, secretId: secretId, secretKey: secretKey, customDomain: customDomain)
         return config.isValid ? config : nil
     }
 }
@@ -96,21 +100,27 @@ enum CosUploader {
     /// - v1.17：og 标签 / 媒体 src 全部用绝对签名 URL（10 年有效），微信能抓到封面渲染成卡片
     /// - v1.18：分享页路径改为【无扩展名】h/<roomKey>/share（微信不再按 index.html 文件识别）；
     ///   同一房源媒体与信息未变化时【零上传】直接复用上次链接；只新增媒体/只改信息时仅上传增量
+    /// - v1.19（方案 A 准备）：①支持【自定义域名】——腾讯云 2024 年后新建桶默认域名强制下载，
+    ///   微信会把链接识别成文件；绑定自定义域名后微信才按网页抓取生成卡片（换域名自动重生成链接）；
+    ///   ②og:image 改用【压缩封面】cover（最长边 400px），微信秒抓不卡顿；
+    ///   ③分享链接追加【版本参数 v】，内容更新后微信按新链接重新抓取，避免旧卡片缓存
     /// 入参全部为值类型（ShareMediaFile / ShareHouseInfo），Task 内不触碰 SwiftData 模型，避免跨线程访问闪退
     static func shareCard(mediaFiles: [ShareMediaFile], roomKey: String, info: ShareHouseInfo, config: CosConfig) async throws -> URL {
         guard !mediaFiles.isEmpty else { throw CosError.missingMedia }
 
-        // 0. 缓存命中：媒体清单、房源信息、COS 配置都没变化 → 直接复用上次链接，零上传
+        // 0. 缓存命中：媒体清单、房源信息、COS 配置（含自定义域名）都没变化 → 直接复用上次链接，零上传
         if let cached = ShareCacheStore.load(roomKey: roomKey),
            cached.bucket == config.bucket,
            cached.region == config.region,
+           (cached.customDomain ?? "") == config.customDomain,
            Set(cached.mediaFiles) == Set(mediaFiles),
            cached.info == info,
            let cachedURL = URL(string: cached.shareURL) {
             return cachedURL
         }
 
-        // 1. 确定需上传的媒体：信息未变时只上传新增媒体（COS 上已存在的直接复用）；信息变了则媒体可全部复用
+        // 1. 确定需上传的媒体：信息未变时只上传新增媒体（COS 上已存在的直接复用）；
+        //    换自定义域名【不重传媒体】——对象仍在同一桶，只是访问入口变化，重新生成 URL 即可
         var toUpload = mediaFiles
         if let cached = ShareCacheStore.load(roomKey: roomKey), cached.bucket == config.bucket, cached.region == config.region, cached.info == info {
             let cachedSet = Set(cached.mediaFiles)
@@ -119,7 +129,7 @@ enum CosUploader {
 
         // 2. 上传需要上传的媒体，并生成每个媒体的绝对 GET 签名 URL（供 HTML 内 src / og:image 使用）
         var mediaTags: [String] = []
-        var imageAbsURLs: [String] = []   // 图片的绝对 URL 列表，第一张作为 og:image 封面
+        var imageAbsURLs: [String] = []   // 图片的绝对 URL 列表，第一张作为 og:image 兜底封面
         for item in mediaFiles {
             let remotePath = "h/\(roomKey)/\(item.name)"
             if toUpload.contains(item) {
@@ -138,11 +148,27 @@ enum CosUploader {
         }
         guard !mediaTags.isEmpty else { throw CosError.missingMedia }
 
+        // 2.5 压缩封面（v1.19）：把第一张照片压缩成最长边 400px 的 JPEG 上传为 h/<roomKey>/cover，
+        //    微信 og:image 抓小图秒开；封面生成/上传失败不阻塞分享，回退用第一张原图
+        var coverSrc = imageAbsURLs.first ?? ""
+        if let firstImage = mediaFiles.first(where: { $0.kind == "image" }),
+           let coverData = makeCoverJPEG(from: MediaStore.url(for: firstImage.name, roomKey: roomKey)) {
+            let coverPath = "h/\(roomKey)/cover"
+            do {
+                try await upload(data: coverData, to: coverPath, contentType: "image/jpeg", config: config)
+                coverSrc = try presignedGetURL(for: coverPath, expires: shareLinkExpires, config: config).absoluteString
+            } catch {
+                // 封面失败不阻塞：沿用第一张原图
+            }
+        }
+
         // 3. 生成并上传分享页（路径无扩展名，微信识别为网页链接而非文件；Content-Type 保持 text/html）
+        //    链接追加版本参数 v（不参与签名，COS 忽略未声明参数）：内容变化 → v 变化 → 微信按新链接重新抓卡片
         let title = "\(info.displayRoomNo) · \(info.layout.isEmpty ? "房源" : info.layout)"
         let desc = "\(info.priceText) · \(info.landlord.isEmpty ? "房东信息见页内" : info.landlord)"
         let pagePath = "h/\(roomKey)/share"
         let shareURL = try presignedGetURL(for: pagePath, expires: shareLinkExpires, config: config)
+        let versionedURL = appendVersionParameter(shareURL, version: "\(Int(Date().timeIntervalSince1970))")
         let html = buildHTML(
             title: title,
             desc: desc,
@@ -155,21 +181,22 @@ enum CosUploader {
             password: info.password,
             remark: info.remark,
             mediaTags: mediaTags,
-            coverSrc: imageAbsURLs.first ?? "",
-            shareLink: shareURL.absoluteString
+            coverSrc: coverSrc,
+            shareLink: versionedURL.absoluteString
         )
         try await upload(data: Data(html.utf8), to: pagePath, contentType: "text/html; charset=utf-8", config: config)
 
-        // 4. 更新缓存
+        // 4. 更新缓存（含自定义域名字段，换域名后旧缓存自动失效）
         ShareCacheStore.save(roomKey: roomKey, record: ShareCacheRecord(
             mediaFiles: mediaFiles,
             info: info,
-            shareURL: shareURL.absoluteString,
+            shareURL: versionedURL.absoluteString,
             bucket: config.bucket,
-            region: config.region
+            region: config.region,
+            customDomain: config.customDomain
         ))
 
-        return shareURL
+        return versionedURL
     }
 
     // MARK: - HTML 模板
@@ -283,8 +310,14 @@ enum CosUploader {
         return message.isEmpty ? "错误码 \(code)" : "错误码 \(code)：\(message)"
     }
 
+    /// v1.19：配置了自定义域名就用它（Host 与签名都指向自定义域名，微信按网页抓取）；
+    /// 未配置时回退 COS 默认域名（2024 年后新建桶默认域名强制下载，微信会识别成文件——仅作兜底）
     private static func host(for config: CosConfig) -> String {
-        "\(config.bucket).cos.\(config.region).myqcloud.com"
+        let domain = config.customDomain.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !domain.isEmpty {
+            return domain
+        }
+        return "\(config.bucket).cos.\(config.region).myqcloud.com"
     }
 
     /// PUT 预签名：Content-Type 参与签名（COS 要求请求携带的 header 必须在签名中，否则返回 403）
@@ -341,6 +374,31 @@ enum CosUploader {
     /// RFC 3986 严格百分号编码（保留 A-Z a-z 0-9 - _ . ~）
     private static func urlEncode(_ s: String) -> String {
         s.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~")) ?? s
+    }
+
+    // MARK: - v1.19 新增：压缩封面 / 版本参数
+
+    /// 生成微信 og:image 压缩封面：最长边 400px、JPEG 质量 0.72（通常几十 KB），微信服务端秒抓
+    private static func makeCoverJPEG(from url: URL) -> Data? {
+        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
+        let maxSide: CGFloat = 400
+        let w = image.size.width
+        let h = image.size.height
+        guard w > 0, h > 0 else { return nil }
+        let scale = min(maxSide / max(w, h), 1)
+        let target = CGSize(width: max(Int(w * scale), 1), height: max(Int(h * scale), 1))
+        UIGraphicsBeginImageContextWithOptions(target, false, 1.0)
+        image.draw(in: CGRect(origin: .zero, size: target))
+        let scaled = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        return scaled?.jpegData(compressionQuality: 0.72)
+    }
+
+    /// 在签名 URL 上追加版本参数 v。v 不参与签名（q-url-param-list 为空，COS 服务端忽略未声明参数，签名仍有效）；
+    /// 内容更新后 v 变化 → 微信把链接当新链接重新抓取 og，避免命中旧卡片缓存
+    private static func appendVersionParameter(_ url: URL, version: String) -> URL {
+        let s = url.absoluteString + "&v=" + version
+        return URL(string: s) ?? url
     }
 
     // MARK: - 加密原语（HMAC-SHA1 / SHA1 hex）

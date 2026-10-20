@@ -1,11 +1,14 @@
 import SwiftUI
 
 /// 设置页：腾讯云 COS 配置（用于分享房源卡片链接）
+/// v1.19：新增「自定义域名（可选）」——腾讯云 2024 年后新建桶默认域名会被微信识别成文件，
+/// 绑定自定义域名后微信才会把分享链接抓成网页卡片；域名留空则回退默认域名（仅兜底）
 struct SettingsView: View {
     @State private var bucket = ""
     @State private var region = "ap-guangzhou"
     @State private var secretId = ""
     @State private var secretKey = ""
+    @State private var customDomain = ""
     @State private var savedTip: String?
 
     init() {
@@ -13,10 +16,12 @@ struct SettingsView: View {
         let r = KeychainStore.load(KeychainKey.region) ?? "ap-guangzhou"
         let i = KeychainStore.load(KeychainKey.secretId) ?? ""
         let k = KeychainStore.load(KeychainKey.secretKey) ?? ""
+        let d = KeychainStore.load(KeychainKey.customDomain) ?? ""
         _bucket = State(initialValue: b)
         _region = State(initialValue: r)
         _secretId = State(initialValue: i)
         _secretKey = State(initialValue: k)
+        _customDomain = State(initialValue: d)
     }
 
     var body: some View {
@@ -32,9 +37,13 @@ struct SettingsView: View {
                 TextField("存储桶名称", text: $bucket)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                TextField("地域（如 ap-guangzhou）", text: $region)
+                TextField("地域（如 ap-guangzhou / ap-hongkong）", text: $region)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                TextField("自定义域名（可选，如 share.xxx.top）", text: $customDomain)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
                 TextField("SecretId", text: $secretId)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -52,7 +61,10 @@ struct SettingsView: View {
             }
 
             Section("开通步骤（简述）") {
-                Text("1. 打开 cloud.tencent.com 注册并实名认证；2. 开通「对象存储 COS」；3. 创建存储桶：名称建议 fangyuan-media、地域选广州、访问权限选「私有读写」；4. 在「访问管理 CAM → API 密钥管理」新建密钥，得到 SecretId 和 SecretKey；5. 填到上方并保存。密钥只存在本机钥匙串，不会上传。")
+                Text("1. 打开 cloud.tencent.com 注册并实名认证；2. 开通「对象存储 COS」；3. 创建存储桶：名称建议 fangyuan-media、地域选广州或香港、访问权限选「私有读写」；4. 在「访问管理 CAM → API 密钥管理」新建密钥，得到 SecretId 和 SecretKey；5. 填到上方并保存。密钥只存在本机钥匙串，不会上传。")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                Text("6. （重要）在「存储桶 → 域名与传输管理 → 自定义源站域名」绑定自己的域名（需先在腾讯云购买域名），并把域名填到上方的「自定义域名」栏——这样微信才会把链接抓成网页卡片，而不是识别成文件。")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             }
@@ -74,6 +86,7 @@ struct SettingsView: View {
         KeychainStore.save(region, for: KeychainKey.region)
         KeychainStore.save(secretId, for: KeychainKey.secretId)
         KeychainStore.save(secretKey, for: KeychainKey.secretKey)
+        KeychainStore.save(customDomain, for: KeychainKey.customDomain)
         savedTip = "配置已保存到手机钥匙串，现在可以去详情页「分享」生成卡片链接"
     }
 }
