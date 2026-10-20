@@ -223,7 +223,7 @@ enum CosUploader {
     }
 
     private static func upload(data: Data, to remotePath: String, contentType: String, config: CosConfig) async throws {
-        let url = try presignedPutURL(for: remotePath, config: config)
+        let url = try presignedPutURL(for: remotePath, contentType: contentType, config: config)
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
@@ -238,27 +238,38 @@ enum CosUploader {
         "\(config.bucket).cos.\(config.region).myqcloud.com"
     }
 
-    private static func presignedPutURL(for path: String, config: CosConfig) throws -> URL {
-        try presignedURL(for: path, method: "PUT", expires: 3600, config: config)
+    /// PUT 预签名：Content-Type 参与签名（COS 要求请求携带的 header 必须在签名中，否则返回 403）
+    private static func presignedPutURL(for path: String, contentType: String, config: CosConfig) throws -> URL {
+        try presignedURL(for: path, method: "PUT", expires: 3600, headers: [("content-type", contentType)], config: config)
     }
 
+    /// GET 预签名：只签 host（下载/访问链接不带自定义 header）
     private static func presignedGetURL(for path: String, expires: Int, config: CosConfig) throws -> URL {
-        try presignedURL(for: path, method: "GET", expires: expires, config: config)
+        try presignedURL(for: path, method: "GET", expires: expires, headers: [], config: config)
     }
 
     /// COS V5 签名：q-sign-algorithm=sha1;q-ak=...;q-sign-time=...;q-key-time=...;q-header-list=...;q-url-param-list=...;q-signature=...
-    private static func presignedURL(for path: String, method: String, expires: Int, config: CosConfig) throws -> URL {
+    /// 关键：签名串里的路径必须与请求 URL 的路径使用同一份百分号编码（中文房号目录会被编码），
+    /// header 的 key 小写、value 按 RFC3986 编码、按字典序拼接，否则 COS 校验不一致返回 403
+    private static func presignedURL(for path: String, method: String, expires: Int, headers: [(String, String)], config: CosConfig) throws -> URL {
         let now = Int(Date().timeIntervalSince1970)
         let signTime = "\(now);\(now + expires)"
         let keyTime = signTime
 
         let hostValue = host(for: config)
-        let pathWithSlash = "/" + path
-        let headerList = "host"
-        let headerValue = "host=\(hostValue.lowercased())"
+        let rawPath = "/" + path
+        // 路径百分号编码（保留 /），签名与请求 URL 必须一致
+        let encodedPath = rawPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? rawPath
+
+        // 组装签名 headers：key 小写、value RFC3986 编码，排序后拼接
+        var pairs = headers.map { (key: $0.0.lowercased(), value: urlEncode($0.1)) }
+        pairs.append(("host", hostValue.lowercased()))
+        pairs.sort { $0.key < $1.key }
+        let headerList = pairs.map(\.key).joined(separator: ";")
+        let headerValue = pairs.map { "\($0.key)=\($0.value)" }.joined(separator: "&")
 
         let signKey = HMAC_SHA1(key: config.secretKey, message: keyTime)
-        let httpString = "\(method.lowercased())\n\(pathWithSlash)\n\n\n\(headerValue)\n"
+        let httpString = "\(method.lowercased())\n\(encodedPath)\n\n\n\(headerValue)\n"
         let sha1Http = SHA1(hexString: httpString)
         let stringToSign = "sha1\n\(signTime)\n\(sha1Http)\n"
         let signature = HMAC_SHA1(key: signKey, message: stringToSign)
@@ -266,11 +277,15 @@ enum CosUploader {
         var comps = URLComponents()
         comps.scheme = "https"
         comps.host = hostValue
-        // 中文/特殊字符房号目录做百分号编码，避免 URL 非法
-        comps.percentEncodedPath = pathWithSlash.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? pathWithSlash
+        comps.percentEncodedPath = encodedPath
         comps.percentEncodedQuery = "q-sign-algorithm=sha1&q-ak=\(config.secretId)&q-sign-time=\(signTime)&q-key-time=\(keyTime)&q-header-list=\(headerList)&q-url-param-list=&q-signature=\(signature)"
         guard let url = comps.url else { throw CosError.invalidConfig }
         return url
+    }
+
+    /// RFC 3986 严格百分号编码（保留 A-Z a-z 0-9 - _ . ~）
+    private static func urlEncode(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~")) ?? s
     }
 
     // MARK: - 加密原语（HMAC-SHA1 / SHA1 hex）
