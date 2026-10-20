@@ -53,12 +53,13 @@ struct CosConfig {
         !bucket.isEmpty && !region.isEmpty && !secretId.isEmpty && !secretKey.isEmpty
     }
 
-    /// 从钥匙串读取配置
+    /// 从钥匙串读取配置（自动去掉首尾空格，避免复制粘贴带入空白导致签名失败）
     static func load() -> CosConfig? {
-        let bucket = KeychainStore.load(KeychainKey.bucket) ?? ""
-        let region = KeychainStore.load(KeychainKey.region) ?? ""
-        let secretId = KeychainStore.load(KeychainKey.secretId) ?? ""
-        let secretKey = KeychainStore.load(KeychainKey.secretKey) ?? ""
+        let trimSet = CharacterSet.whitespacesAndNewlines
+        let bucket = (KeychainStore.load(KeychainKey.bucket) ?? "").trimmingCharacters(in: trimSet)
+        let region = (KeychainStore.load(KeychainKey.region) ?? "").trimmingCharacters(in: trimSet)
+        let secretId = (KeychainStore.load(KeychainKey.secretId) ?? "").trimmingCharacters(in: trimSet)
+        let secretKey = (KeychainStore.load(KeychainKey.secretKey) ?? "").trimmingCharacters(in: trimSet)
         let config = CosConfig(bucket: bucket, region: region, secretId: secretId, secretKey: secretKey)
         return config.isValid ? config : nil
     }
@@ -67,6 +68,9 @@ struct CosConfig {
 // MARK: - 腾讯云 COS V5 预签名上传（HMAC-SHA1，零第三方依赖）
 
 enum CosUploader {
+
+    /// 分享链接有效期：永久（10 年，COS 预签名 URL 上限内足够长，视为长期有效）
+    static let shareLinkExpires: Int = 3650 * 86400
 
     enum CosError: LocalizedError {
         case invalidConfig
@@ -88,7 +92,7 @@ enum CosUploader {
         }
     }
 
-    /// 为房源生成 H5 分享卡片：上传所有媒体 → 生成 index.html → 上传 → 返回 30 天有效链接（URL 对象，系统分享面板可直接作为链接分享）
+    /// 为房源生成 H5 分享卡片：上传所有媒体 → 生成 index.html → 上传 → 返回长期有效的链接（URL 对象，系统分享面板可直接作为链接分享）
     static func shareCard(for house: House, config: CosConfig) async throws -> URL {
         let media = house.mediaItems
         guard !media.isEmpty else { throw CosError.missingMedia }
@@ -114,7 +118,7 @@ enum CosUploader {
         // 2. 生成 index.html（带 og 标签，微信抓取卡片）
         let title = "\(house.displayRoomNo) · \(house.layout.isEmpty ? "房源" : house.layout)"
         let desc = "\(house.priceText) · \(house.landlord.isEmpty ? "房东信息见页内" : house.landlord)"
-        // 封面用第一张图（微信要求 og:image 为长期有效 URL；预签名 URL 30 天有效期内可用）
+        // 封面用第一张图（og:image 用与页面相同的长期有效 URL，微信能持续抓取到封面）
         let cover = mediaTags.first { $0.contains("img") } ?? ""
         let coverSrc = cover.isEmpty ? "" : extractSrc(from: cover)
 
@@ -136,8 +140,8 @@ enum CosUploader {
         let htmlPath = "h/\(roomKey)/index.html"
         try await upload(data: htmlData, to: htmlPath, contentType: "text/html; charset=utf-8", config: config)
 
-        // 3. 返回 index.html 的 30 天 GET 预签名 URL
-        return try presignedGetURL(for: htmlPath, expires: 30 * 86400, config: config)
+        // 3. 返回 index.html 的长期有效 GET 预签名 URL
+        return try presignedGetURL(for: htmlPath, expires: shareLinkExpires, config: config)
     }
 
     private static func extractSrc(from tag: String) -> String {
@@ -199,7 +203,7 @@ enum CosUploader {
         \(hero)
         \(info)
         \(grid)
-        <div class="foot">房源管家 · 分享链接 30 天内有效</div>
+        <div class="foot">房源管家 · 分享链接长期有效</div>
         </div>
         </body>
         </html>
