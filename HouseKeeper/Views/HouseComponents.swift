@@ -1,60 +1,174 @@
 import SwiftUI
-import Photos
-import AVFoundation
+import UIKit
 import AVKit
+import Photos
 
-// MARK: - 主题
+// MARK: - 主题色（沿用网页版配色方向：深墨蓝 + 暖白 + 琥珀）
 
 enum AppTheme {
-    static let primary = Color(red: 0.22, green: 0.44, blue: 0.85)
-    static let background = Color(red: 0.96, green: 0.96, blue: 0.97)
+    /// 深墨蓝主色
+    static let primary = Color(red: 0.20, green: 0.28, blue: 0.40)
+    /// 暖白背景
+    static let background = Color(red: 0.98, green: 0.96, blue: 0.93)
+    /// 琥珀价格强调
+    static let accent = Color(red: 0.87, green: 0.55, blue: 0.22)
 }
 
-// MARK: - 首页房源卡片（v1.6 改版布局）
-// 徽章在右上角；第一行 房号+价格（加大加粗）；第二行 户型+实拍情况；第三行 密码；第四行 备注
+// MARK: - 状态徽章
+
+struct StatusBadge: View {
+    let status: HouseStatus
+
+    var body: some View {
+        Text(status.label)
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .foregroundColor(.white)
+            .background(badgeColor)
+            .clipShape(Capsule())
+    }
+
+    private var badgeColor: Color {
+        switch status {
+        case .available: return Color(red: 0.24, green: 0.58, blue: 0.34)
+        case .rented: return Color(red: 0.47, green: 0.49, blue: 0.55)
+        }
+    }
+}
+
+// MARK: - 视频首帧缩略图（异步提取第一帧，避免灰色占位）
+
+struct VideoThumbnailView: View {
+    let url: URL
+    @State private var thumbnail: UIImage?
+
+    var body: some View {
+        Group {
+            if let thumbnail {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ZStack {
+                    Color.gray.opacity(0.2)
+                    ProgressView()
+                }
+            }
+        }
+        .onAppear(perform: loadFirstFrame)
+    }
+
+    private func loadFirstFrame() {
+        guard thumbnail == nil else { return }
+        let asset = AVAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 640, height: 640)
+        let time = CMTime(seconds: 0.1, preferredTimescale: 600)
+        generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, _, _ in
+            guard let cgImage else { return }
+            DispatchQueue.main.async {
+                thumbnail = UIImage(cgImage: cgImage)
+            }
+        }
+    }
+}
+
+// MARK: - 媒体缩略图
+
+struct MediaThumbView: View {
+    let media: MediaItem
+    let roomKey: String
+
+    var body: some View {
+        if media.kind == "video" {
+            ZStack {
+                VideoThumbnailView(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
+                // 播放三角：缩小 + 半透明，不遮挡画面
+                Image(systemName: "play.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(.white.opacity(0.72))
+                    .shadow(radius: 2)
+            }
+        } else {
+            thumbImage
+        }
+    }
+
+    private var thumbImage: some View {
+        Group {
+            if let image = UIImage(contentsOfFile: MediaStore.url(for: media.fileName, roomKey: roomKey).path) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ZStack {
+                    Color.gray.opacity(0.2)
+                    Image(systemName: "photo")
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 房源卡片
+// 布局：左上封面 + 右侧信息
+//  第一行：房号（加大加粗）+ 价格（加大加粗），状态徽章在右上角
+//  第二行：户型 + 实拍图情况
+//  第三行：密码
+//  第四行：备注
 
 struct HouseCardView: View {
     let house: House
 
-    @State private var previewRoute: PhotoPreviewRoute?
-    @State private var playingVideo: MediaItem?
+    @State private var previewRoute: PhotoPreviewRoute? = nil
+    @State private var playingVideo: MediaItem? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            // 左侧：封面（视频优先，带半透明播放三角；无视频显示首图；无媒体显示占位）
-            Button(action: openCover) {
+            // 封面：有视频 → 视频缩略图 + 播放；无视频 → 首图，点击放大左右滑动浏览全部照片
+            Button {
+                openCover()
+            } label: {
                 coverView
-                    .frame(width: 96, height: 96)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
             }
             .buttonStyle(.plain)
+            .frame(width: 92, height: 76)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .top) {
-                    // 第一行：房号 + 价格（加大加粗）
+                // 第一行：房号 + 价格（都加大加粗），状态徽章在右上角
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(house.displayRoomNo)
                         .font(.title3.weight(.bold))
                         .foregroundColor(.primary)
-                    Spacer()
-                    // 右上角：待租 / 已租徽章
-                    Text(house.status.label)
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(house.status == .available ? Color.green.opacity(0.15) : Color.orange.opacity(0.15))
-                        .foregroundColor(house.status == .available ? Color(red: 0.1, green: 0.55, blue: 0.25) : Color.orange)
-                        .clipShape(Capsule())
+                    Text(house.priceText)
+                        .font(.headline.weight(.bold))
+                        .foregroundColor(AppTheme.accent)
+                    Spacer(minLength: 0)
+                    StatusBadge(status: house.status)
                 }
 
-                Text("\(house.price)元/月")
-                    .font(.headline.weight(.bold))
-                    .foregroundColor(Color(red: 0.85, green: 0.55, blue: 0.1))
-
                 // 第二行：户型 + 实拍图情况
-                Text("\(house.layout.isEmpty ? "未填户型" : house.layout) · \(mediaSummary)")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(house.layout.isEmpty ? "户型未填" : house.layout)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    if house.hasPhoto || house.hasVideo {
+                        Image(systemName: "photo.fill")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text(mediaSummary)
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("无实拍图")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                }
 
                 // 第三行：密码
                 Text("密码：\(house.password.isEmpty ? "—" : house.password)")
@@ -121,29 +235,21 @@ struct HouseCardView: View {
     }
 }
 
-// MARK: - 可右滑卡片（手指向右滑动卡片，露出左侧「编辑 / 已租 / 删除」按钮）
+// MARK: - 可右滑卡片（手指向右滑动卡片，露出左侧「已租 / 删除」按钮）
 
 struct SwipeableHouseCard: View {
     let house: House
-    let onTap: () -> Void
-    let onEdit: () -> Void
     let onToggleStatus: () -> Void
     let onDelete: () -> Void
 
     @State private var offset: CGFloat = 0
-    private let actionWidth: CGFloat = 62
-    private var maxOffset: CGFloat { actionWidth * 3 }
+    private let actionWidth: CGFloat = 78
+    private var maxOffset: CGFloat { actionWidth * 2 }
 
     var body: some View {
         ZStack(alignment: .leading) {
             // 底层操作按钮（卡片向右滑开后露出）
             HStack(spacing: 0) {
-                actionButton(
-                    title: "编辑",
-                    icon: "pencil",
-                    color: Color(red: 0.36, green: 0.42, blue: 0.55),
-                    action: onEdit
-                )
                 actionButton(
                     title: house.status == .available ? "已租" : "待租",
                     icon: house.status == .available ? "checkmark" : "arrow.uturn.backward",
@@ -179,14 +285,6 @@ struct SwipeableHouseCard: View {
                             }
                         }
                 )
-                .onTapGesture {
-                    if offset > 0 {
-                        // 已滑开时点卡片 = 收回
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { offset = 0 }
-                    } else {
-                        onTap()
-                    }
-                }
         }
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
@@ -222,15 +320,7 @@ struct HouseDetailVideoItem: View {
         Button {
             playing = true
         } label: {
-            ZStack {
-                MediaThumbView(media: media, roomKey: roomKey)
-                Image(systemName: "play.fill")
-                    .font(.system(size: 26))
-                    .foregroundColor(.white.opacity(0.85))
-                    .shadow(radius: 3)
-            }
-            .frame(width: 110, height: 110)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            MediaThumbView(media: media, roomKey: roomKey)
         }
         .buttonStyle(.plain)
         .fullScreenCover(isPresented: $playing) {
@@ -239,70 +329,62 @@ struct HouseDetailVideoItem: View {
     }
 }
 
-// MARK: - 全屏视频播放器（长按视频可保存到相册）
+// MARK: - 全屏视频播放器（卡片点封面播放用，长按保存视频到相册）
 
 struct FullScreenVideoPlayer: View {
     let media: MediaItem
     let roomKey: String
-
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
     @State private var saveMessage: String?
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
 
             if let player {
                 VideoPlayer(player: player)
-                    .ignoresSafeArea()
-            } else {
-                ProgressView()
-                    .tint(.white)
-            }
-
-            // 关闭按钮
-            VStack {
-                HStack {
-                    Spacer()
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 30))
-                            .foregroundColor(.white.opacity(0.85))
+                    // 长按播放界面：保存视频到相册
+                    .contextMenu {
+                        Button {
+                            saveVideoToAlbum()
+                        } label: {
+                            Label("保存到相册", systemImage: "square.and.arrow.down")
+                        }
                     }
-                    .padding(12)
-                }
-                Spacer()
             }
 
-            // 长按保存提示
-            if let msg = saveMessage {
-                Text(msg)
-                    .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color.black.opacity(0.75))
-                    .foregroundColor(.white)
-                    .clipShape(Capsule())
-                    .padding(.bottom, 60)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundColor(.white.opacity(0.85))
+                    .padding(18)
             }
         }
+        .statusBarHidden()
+        .alert("保存到相册", isPresented: Binding(
+            get: { saveMessage != nil },
+            set: { if !$0 { saveMessage = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(saveMessage ?? "")
+        }
         .onAppear {
-            let url = MediaStore.url(for: media.fileName, roomKey: roomKey)
-            player = AVPlayer(url: url)
-            player?.play()
+            if player == nil {
+                player = AVPlayer(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
+                player?.play()
+            }
         }
         .onDisappear {
             player?.pause()
-        }
-        .onLongPressGesture {
-            saveVideoToAlbum()
+            player = nil
         }
     }
 
+    /// 保存当前视频到系统相册（仅新增写入权限）
     private func saveVideoToAlbum() {
         let url = MediaStore.url(for: media.fileName, roomKey: roomKey)
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -330,229 +412,6 @@ struct FullScreenVideoPlayer: View {
     }
 }
 
-// MARK: - 媒体缩略图（照片 / 视频首帧，方形裁切填满）
-
-struct MediaThumbView: View {
-    let media: MediaItem
-    let roomKey: String
-    @State private var image: UIImage?
-    @State private var videoFrame: UIImage?
-
-    var body: some View {
-        Group {
-            if media.kind == "image" {
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    placeholder
-                }
-            } else {
-                if let frame = videoFrame {
-                    Image(uiImage: frame)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    placeholder
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .onAppear { load() }
-    }
-
-    private var placeholder: some View {
-        ZStack {
-            Color(red: 0.9, green: 0.92, blue: 0.94)
-            Image(systemName: media.kind == "image" ? "photo" : "video")
-                .foregroundColor(.gray)
-        }
-    }
-
-    private func load() {
-        let url = MediaStore.url(for: media.fileName, roomKey: roomKey)
-        if media.kind == "image" {
-            image = UIImage(contentsOfFile: url.path)
-        } else {
-            // 视频首帧异步提取（AVAssetImageGenerator）
-            let asset = AVAsset(url: url)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 600, height: 600)
-            generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: .zero)]) { _, cgImage, _, _, _ in
-                if let cgImage {
-                    DispatchQueue.main.async {
-                        self.videoFrame = UIImage(cgImage: cgImage)
-                    }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - 图片全屏预览（左右滑动浏览全部照片；长按图片保存到相册，和微信一致）
-
-struct PhotoPreviewRoute: Identifiable, Hashable {
-    let index: Int
-    var id: Int { index }
-}
-
-struct PhotoPreviewView: View {
-    let photos: [MediaItem]
-    let startIndex: Int
-    let roomKey: String
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var currentIndex: Int
-    @State private var saveMessage: String?
-
-    init(photos: [MediaItem], startIndex: Int, roomKey: String) {
-        self.photos = photos
-        self.startIndex = startIndex
-        self.roomKey = roomKey
-        _currentIndex = State(initialValue: startIndex)
-    }
-
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-
-            TabView(selection: $currentIndex) {
-                ForEach(Array(photos.enumerated()), id: \.element.id) { index, media in
-                    ZoomablePhotoView(media: media, roomKey: roomKey, onSave: {
-                        saveToAlbum(media)
-                    })
-                    .tag(index)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-
-            // 关闭按钮
-            VStack {
-                HStack {
-                    Spacer()
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 30))
-                            .foregroundColor(.white.opacity(0.85))
-                    }
-                    .padding(12)
-                }
-                Spacer()
-            }
-
-            if photos.count > 1 {
-                VStack {
-                    Spacer()
-                    Text("\(currentIndex + 1) / \(photos.count)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.black.opacity(0.5))
-                        .clipShape(Capsule())
-                        .padding(.bottom, 24)
-                }
-            }
-
-            if let msg = saveMessage {
-                Text(msg)
-                    .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color.black.opacity(0.75))
-                    .foregroundColor(.white)
-                    .clipShape(Capsule())
-                    .padding(.bottom, 80)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-            }
-        }
-    }
-
-    private func saveToAlbum(_ media: MediaItem) {
-        let url = MediaStore.url(for: media.fileName, roomKey: roomKey)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            saveMessage = "图片文件不存在，无法保存"
-            return
-        }
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-            switch status {
-            case .authorized, .limited:
-                PHPhotoLibrary.shared().performChanges {
-                    PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
-                } completionHandler: { success, error in
-                    DispatchQueue.main.async {
-                        saveMessage = success
-                            ? "已保存到相册"
-                            : "保存失败：\(error?.localizedDescription ?? "未知错误")"
-                    }
-                }
-            default:
-                DispatchQueue.main.async {
-                    saveMessage = "没有相册写入权限，请在 设置 → 隐私与安全 → 照片 中允许"
-                }
-            }
-        }
-    }
-}
-
-// MARK: - 可缩放图片（双击 / 双指缩放，长按弹出保存）
-
-struct ZoomablePhotoView: View {
-    let media: MediaItem
-    let roomKey: String
-    let onSave: () -> Void
-
-    @State private var image: UIImage?
-    @State private var scale: CGFloat = 1
-    @State private var lastScale: CGFloat = 1
-    @State private var showSave = false
-
-    var body: some View {
-        ZStack {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .scaleEffect(scale)
-                    .gesture(
-                        MagnificationGesture()
-                            .onChanged { value in
-                                scale = lastScale * value
-                            }
-                            .onEnded { _ in
-                                lastScale = scale
-                            }
-                    )
-                    .onTapGesture(count: 2) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            scale = scale > 1 ? 1 : 2
-                            lastScale = scale
-                        }
-                    }
-                    .onLongPressGesture(minimumDuration: 0.5, pressing: { pressing in
-                        if pressing { showSave = true }
-                    }, perform: {})
-            } else {
-                ProgressView()
-                    .tint(.white)
-            }
-        }
-        .onAppear {
-            let url = MediaStore.url(for: media.fileName, roomKey: roomKey)
-            image = UIImage(contentsOfFile: url.path)
-        }
-        .confirmationDialog("保存到相册？", isPresented: $showSave, titleVisibility: .visible) {
-            Button("保存到相册") { onSave() }
-            Button("取消", role: .cancel) {}
-        }
-    }
-}
-
 // MARK: - 系统分享面板（UIActivityViewController 封装，可分享到微信）
 
 struct ShareSheet: UIViewControllerRepresentable {
@@ -565,7 +424,7 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-// MARK: - 空状态（紧贴筛选栏下方，不再大幅下沉）
+// MARK: - 空状态
 
 struct EmptyStateView: View {
     let icon: String
@@ -586,6 +445,6 @@ struct EmptyStateView: View {
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 24)
+        .padding(.vertical, 60)
     }
 }

@@ -96,30 +96,10 @@ extension House {
         return raw.components(separatedBy: illegal).joined(separator: "-")
     }
 
-    /// 房号数字串（如 "1420下" → "1420"）
-    private var roomDigits: String {
-        String(roomNo.prefix { $0.isNumber })
-    }
-
-    // v1.7 排序规则：
-    // · 3 位房号（如 634）= 第 1 位楼层（6楼）+ 后 2 位房号（34号），10 楼以下固定 3 位
-    // · 4 位房号（如 1420）= 前 2 位楼层（14楼）+ 后 2 位房号（20号），10 楼及以上固定 4 位
-    // · 首页排序 = 座号升序 → 楼层升序 → 房号升序
-
-    /// 楼层：3位数（10楼以下）首位为楼层（如 634 → 6楼34号）；4位数（10楼及以上）前两位为楼层（如 1420 → 14楼20号）
-    var floorNumber: Int {
-        let digits = roomDigits
-        if digits.count >= 4 { return Int(digits.prefix(2)) ?? 0 }
-        if digits.count == 3 { return Int(digits.prefix(1)) ?? 0 }
+    /// 房号数字部分（用于首页按「座号 + 房号」升序排序，如 1420上 → 1420）
+    var sortRoomNo: Int {
+        let digits = roomNo.prefix { $0.isNumber }
         return Int(digits) ?? 0
-    }
-
-    /// 房号：后两位数字
-    var roomNumber: Int {
-        let digits = roomDigits
-        if digits.count >= 4 { return Int(digits.dropFirst(2)) ?? 0 }
-        if digits.count == 3 { return Int(digits.dropFirst(1)) ?? 0 }
-        return 0
     }
 
     var priceText: String { "\(price)元/月" }

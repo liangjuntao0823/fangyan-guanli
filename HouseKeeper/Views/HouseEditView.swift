@@ -35,10 +35,153 @@ struct HouseEditView: View {
     var body: some View {
         NavigationStack {
             Form {
-                basicInfoSection
-                statusSection
-                mediaSection
-                remarkSection
+                Section("基本信息") {
+                    HStack {
+                        Text("房号")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("如 2334 或 2-1418", text: $roomNo)
+                            .keyboardType(.numbersAndPunctuation)
+                            .onChange(of: roomNo) { _, newValue in
+                                guard !towerTouched else { return }
+                                if newValue.hasPrefix("2-") || newValue.hasPrefix("2－") {
+                                    tower = 2
+                                } else if !newValue.isEmpty {
+                                    tower = 1
+                                }
+                            }
+                    }
+
+                    Picker("座号", selection: $tower) {
+                        Text("1座").tag(1)
+                        Text("2座").tag(2)
+                    }
+                    .onChange(of: tower) {
+                        towerTouched = true
+                    }
+
+                    HStack {
+                        Text("房东")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("房东姓名", text: $landlord)
+                    }
+
+                    HStack {
+                        Text("户型")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("如 单间 / 复式", text: $layout)
+                    }
+
+                    HStack {
+                        Text("价格")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("元/月", text: $priceText)
+                            .keyboardType(.numberPad)
+                        Spacer()
+                        if !priceText.isEmpty {
+                            Text("\(Int(priceText) ?? 0)元/月")
+                                .font(.footnote)
+                                .foregroundColor(AppTheme.accent)
+                        }
+                    }
+
+                    HStack {
+                        Text("密码")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("进门密码", text: $password)
+                    }
+                }
+
+                Section("状态") {
+                    Picker("房源状态", selection: $status) {
+                        Text("待租").tag(HouseStatus.available)
+                        Text("已租").tag(HouseStatus.rented)
+                    }
+                    .pickerStyle(.segmented)
+                    Text(status == .available ? "待租：可带看" : "已租：已租出，手动更新状态即可")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 9, matching: .images) {
+                                Label("添加照片", systemImage: "photo.badge.plus")
+                                    .font(.subheadline)
+                            }
+                            .buttonStyle(.bordered)
+
+                            PhotosPicker(selection: $selectedVideos, maxSelectionCount: 3, matching: .videos) {
+                                Label("添加视频", systemImage: "video.badge.plus")
+                                    .font(.subheadline)
+                            }
+                            .buttonStyle(.bordered)
+
+                            if loadingMedia {
+                                ProgressView()
+                                    .padding(.leading, 4)
+                            }
+                        }
+
+                        if mediaItems.isEmpty {
+                            Text("还没添加照片或视频，添加后可实时预览")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                        } else {
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+                                // 用唯一的 fileName 作标识（不用 MediaItem.id：SwiftData 新对象 id 不可靠）
+                                ForEach(mediaItems, id: \.fileName) { media in
+                                    ZStack(alignment: .topTrailing) {
+                                        // 固定正方形格子，内容缩放裁切填满，横屏照片不重叠
+                                        Color.clear
+                                            .aspectRatio(1, contentMode: .fit)
+                                            .overlay(
+                                                MediaThumbView(media: media, roomKey: originalRoomKey.isEmpty ? currentRoomKey : originalRoomKey)
+                                            )
+                                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                                            .contentShape(RoundedRectangle(cornerRadius: 8))
+
+                                        // 删除按钮：必须限定尺寸 + borderless 样式，防止点击区域扩大到整格
+                                        // （此前 Button 直接放 ZStack 无约束，Form+LazyVGrid 下整格都会被判定为按钮，
+                                        //   导致「点图片任意区域就触发删除」）
+                                        Button {
+                                            // 单条删除：只移除 fileName 完全匹配的这一条，其余不受影响
+                                            removeMedia(fileName: media.fileName)
+                                        } label: {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .font(.system(size: 18))
+                                                .foregroundColor(.white)
+                                                .shadow(radius: 2)
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .frame(width: 32, height: 32)
+                                        .contentShape(Rectangle())
+                                        .padding(3)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("照片 / 视频")
+                } footer: {
+                    Text("照片和视频保存在本机，分享时随房源信息一起发送。")
+                }
+
+                Section("备注") {
+                    HStack(alignment: .top) {
+                        Text("备注")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("如 采光好 / 带阳台 / 近电梯", text: $remark, axis: .vertical)
+                            .lineLimit(1...4)
+                    }
+                }
             }
             .navigationTitle(isEditing ? "编辑房源" : "登记房源")
             .navigationBarTitleDisplayMode(.inline)
@@ -65,172 +208,6 @@ struct HouseEditView: View {
                 Text(errorMessage)
             }
             .onAppear(perform: loadFromHouse)
-        }
-    }
-
-    // MARK: - 表单分区（拆分子视图，避免单表达式类型检查超时）
-
-    private var basicInfoSection: some View {
-        Section("基本信息") {
-            HStack {
-                Text("房号")
-                    .foregroundColor(.secondary)
-                    .frame(width: 64, alignment: .leading)
-                TextField("如 2334 或 2-1418", text: $roomNo)
-                    .keyboardType(.numbersAndPunctuation)
-                    .onChange(of: roomNo) { _, newValue in
-                        guard !towerTouched else { return }
-                        if newValue.hasPrefix("2-") || newValue.hasPrefix("2－") {
-                            tower = 2
-                        } else if !newValue.isEmpty {
-                            tower = 1
-                        }
-                    }
-            }
-
-            Picker("座号", selection: $tower) {
-                Text("1座").tag(1)
-                Text("2座").tag(2)
-            }
-            .onChange(of: tower) {
-                towerTouched = true
-            }
-
-            HStack {
-                Text("房东")
-                    .foregroundColor(.secondary)
-                    .frame(width: 64, alignment: .leading)
-                TextField("房东姓名", text: $landlord)
-            }
-
-            HStack {
-                Text("户型")
-                    .foregroundColor(.secondary)
-                    .frame(width: 64, alignment: .leading)
-                TextField("如 单间 / 复式", text: $layout)
-            }
-
-            HStack {
-                Text("价格")
-                    .foregroundColor(.secondary)
-                    .frame(width: 64, alignment: .leading)
-                TextField("元/月", text: $priceText)
-                    .keyboardType(.numberPad)
-                Spacer()
-                if !priceText.isEmpty {
-                    Text("\(Int(priceText) ?? 0)元/月")
-                        .font(.footnote)
-                        .foregroundColor(.orange)
-                }
-            }
-
-            HStack {
-                Text("密码")
-                    .foregroundColor(.secondary)
-                    .frame(width: 64, alignment: .leading)
-                TextField("进门密码", text: $password)
-            }
-        }
-    }
-
-    private var statusSection: some View {
-        Section("状态") {
-            Picker("房源状态", selection: $status) {
-                Text("待租").tag(HouseStatus.available)
-                Text("已租").tag(HouseStatus.rented)
-            }
-            .pickerStyle(.segmented)
-            Text(status == .available ? "待租：可带看" : "已租：已租出，手动更新状态即可")
-                .font(.footnote)
-                .foregroundColor(.secondary)
-        }
-    }
-
-    private var mediaSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 10) {
-                mediaPickerRow
-                if mediaItems.isEmpty {
-                    Text("还没添加照片或视频，添加后可实时预览")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                } else {
-                    mediaGrid
-                }
-            }
-        } header: {
-            Text("照片 / 视频")
-        } footer: {
-            Text("照片和视频保存在本机，分享时随房源信息一起发送。")
-        }
-    }
-
-    private var mediaPickerRow: some View {
-        HStack(spacing: 10) {
-            PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 9, matching: .images) {
-                Label("添加照片", systemImage: "photo.badge.plus")
-                    .font(.subheadline)
-            }
-            .buttonStyle(.bordered)
-
-            PhotosPicker(selection: $selectedVideos, maxSelectionCount: 3, matching: .videos) {
-                Label("添加视频", systemImage: "video.badge.plus")
-                    .font(.subheadline)
-            }
-            .buttonStyle(.bordered)
-
-            if loadingMedia {
-                ProgressView()
-                    .padding(.leading, 4)
-            }
-        }
-    }
-
-    private var mediaGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-            // 用唯一的 fileName 作标识（不用 MediaItem.id：SwiftData 新对象 id 不可靠）
-            ForEach(mediaItems, id: \.fileName) { media in
-                mediaCell(media)
-            }
-        }
-    }
-
-    /// 单个媒体格子：固定正方形、内容裁切填满；删除按钮限定 32×32 热区（borderless），防止误删全部
-    private func mediaCell(_ media: MediaItem) -> some View {
-        ZStack(alignment: .topTrailing) {
-            Color.clear
-                .aspectRatio(1, contentMode: .fit)
-                .overlay(
-                    MediaThumbView(media: media, roomKey: originalRoomKey.isEmpty ? currentRoomKey : originalRoomKey)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .contentShape(RoundedRectangle(cornerRadius: 8))
-
-            Button {
-                // 单条删除：只移除 fileName 完全匹配的这一条，其余不受影响
-                removeMedia(fileName: media.fileName)
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 18))
-                    .foregroundColor(.white)
-                    .shadow(radius: 2)
-            }
-            .buttonStyle(.borderless)
-            .frame(width: 32, height: 32)
-            .contentShape(Rectangle())
-            .padding(3)
-        }
-    }
-
-    private var remarkSection: some View {
-        Section("备注") {
-            HStack(alignment: .top) {
-                Text("备注")
-                    .foregroundColor(.secondary)
-                    .frame(width: 64, alignment: .leading)
-                TextField("如 采光好 / 带阳台 / 近电梯", text: $remark, axis: .vertical)
-                    .lineLimit(1...4)
-            }
         }
     }
 
