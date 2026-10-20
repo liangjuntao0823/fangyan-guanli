@@ -37,11 +37,10 @@ struct StatusBadge: View {
     }
 }
 
-// MARK: - 视频首帧缩略图（异步提取第一帧，避免灰色占位；fit=true 时完整显示不裁切）
+// MARK: - 视频首帧缩略图（异步提取第一帧，避免灰色占位）
 
 struct VideoThumbnailView: View {
     let url: URL
-    var fit: Bool = false
     @State private var thumbnail: UIImage?
 
     var body: some View {
@@ -49,8 +48,7 @@ struct VideoThumbnailView: View {
             if let thumbnail {
                 Image(uiImage: thumbnail)
                     .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaledToFill()
             } else {
                 ZStack {
                     Color.gray.opacity(0.2)
@@ -66,7 +64,7 @@ struct VideoThumbnailView: View {
         let asset = AVAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 1280, height: 1280)
+        generator.maximumSize = CGSize(width: 640, height: 640)
         let time = CMTime(seconds: 0.1, preferredTimescale: 600)
         generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, _, _ in
             guard let cgImage else { return }
@@ -77,20 +75,19 @@ struct VideoThumbnailView: View {
     }
 }
 
-// MARK: - 媒体缩略图（fit=true 用于详情页视频条目，完整显示竖版视频，不再裁切成横图）
+// MARK: - 媒体缩略图
 
 struct MediaThumbView: View {
     let media: MediaItem
     let roomKey: String
-    var fit: Bool = false
 
     var body: some View {
         if media.kind == "video" {
             ZStack {
-                VideoThumbnailView(url: MediaStore.url(for: media.fileName, roomKey: roomKey), fit: fit)
+                VideoThumbnailView(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
                 // 播放三角：缩小 + 半透明，不遮挡画面
                 Image(systemName: "play.fill")
-                    .font(.system(size: fit ? 0 : 20))
+                    .font(.system(size: 20))
                     .foregroundColor(.white.opacity(0.72))
                     .shadow(radius: 2)
             }
@@ -239,7 +236,6 @@ struct HouseCardView: View {
 }
 
 // MARK: - 可左滑卡片（手指向左滑动卡片，露出右侧「编辑 / 已租 / 删除」按钮）
-// v1.11：轻点/轻扫不再误触发左滑（minimumDistance 24 + 只认横向 + 滑过半程才展开 + 点击已展开卡片先收回）
 
 struct SwipeableHouseCard: View {
     let house: House
@@ -248,8 +244,6 @@ struct SwipeableHouseCard: View {
     let onDelete: () -> Void
 
     @State private var offset: CGFloat = 0
-    @State private var isDragging = false
-    @State private var dragStartOffset: CGFloat = 0
     private let actionWidth: CGFloat = 64
     private var maxOffset: CGFloat { actionWidth * 3 }
 
@@ -281,32 +275,20 @@ struct SwipeableHouseCard: View {
 
             HouseCardView(house: house)
                 .offset(x: offset)
-                .contentShape(Rectangle())
-                // 已展开时轻点卡片任意区域先收回（不干扰按钮；未展开时不影响内部封面按钮点击）
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        if offset != 0 {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { offset = 0 }
-                        }
-                    }
-                )
                 .gesture(
-                    DragGesture(minimumDistance: 24)
+                    DragGesture()
                         .onChanged { value in
-                            // 只认横向拖动（横向位移大于纵向才处理），纵向交给外层滚动
-                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                            if !isDragging {
-                                isDragging = true
-                                dragStartOffset = offset
+                            if value.translation.width < 0 {
+                                // 左滑：露出右侧操作按钮
+                                offset = max(value.translation.width, -maxOffset)
+                            } else if offset < 0 {
+                                // 右滑：收回卡片
+                                offset = min(offset + value.translation.width, 0)
                             }
-                            let proposed = dragStartOffset + value.translation.width
-                            offset = min(max(proposed, -maxOffset), 0)
                         }
-                        .onEnded { _ in
-                            isDragging = false
+                        .onEnded { value in
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                // 滑过半程才展开，否则弹回，避免轻微滑动就露出红边
-                                offset = offset <= -actionWidth * 1.5 ? -maxOffset : 0
+                                offset = value.translation.width < -actionWidth ? -maxOffset : 0
                             }
                         }
                 )
@@ -334,46 +316,22 @@ struct SwipeableHouseCard: View {
     }
 }
 
-// MARK: - 详情页视频条目（按视频原始比例完整显示首帧，竖版视频不再被裁成横图；播放界面长按可保存视频）
+// MARK: - 详情页视频条目（缩略图 + 播放三角，点击全屏播放，播放界面长按可保存视频到相册）
 
 struct HouseDetailVideoItem: View {
     let media: MediaItem
     let roomKey: String
     @State private var playing = false
-    @State private var isPortrait = false
 
     var body: some View {
         Button {
             playing = true
         } label: {
-            ZStack {
-                Color.black.opacity(0.07)
-                MediaThumbView(media: media, roomKey: roomKey, fit: true)
-                // 大播放三角：一眼可辨这是视频，不是图片
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: 36))
-                    .foregroundColor(.white.opacity(0.92))
-                    .shadow(radius: 3)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: isPortrait ? 300 : 200)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            MediaThumbView(media: media, roomKey: roomKey)
         }
         .buttonStyle(.plain)
         .fullScreenCover(isPresented: $playing) {
             FullScreenVideoPlayer(media: media, roomKey: roomKey)
-        }
-        .onAppear(perform: detectOrientation)
-    }
-
-    /// 读取视频原始宽高比：竖版视频用更高容器，完整显示不裁切
-    private func detectOrientation() {
-        let url = MediaStore.url(for: media.fileName, roomKey: roomKey)
-        let asset = AVAsset(url: url)
-        guard let track = asset.tracks(withMediaType: .video).first else { return }
-        let size = track.naturalSize.applying(track.preferredTransform)
-        if abs(size.height) > abs(size.width) {
-            isPortrait = true
         }
     }
 }
