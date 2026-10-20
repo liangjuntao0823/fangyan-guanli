@@ -15,6 +15,8 @@
 		A10000010000000000000006 /* HouseComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000010000000000000006 /* HouseComponents.swift */; };
 		A10000010000000000000007 /* MediaStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000010000000000000007 /* MediaStore.swift */; };
 		A10000010000000000000008 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000010000000000000008 /* Assets.xcassets */; };
+		A10000010000000000000009 /* CosUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000000000A /* CosUploader.swift */; };
+		A1000001000000000000000A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001000000000000000B /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,6 +29,8 @@
 		B10000010000000000000007 /* MediaStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaStore.swift; sourceTree = "<group>"; };
 		B10000010000000000000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B10000010000000000000009 /* HouseKeeper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HouseKeeper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1000001000000000000000A /* CosUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CosUploader.swift; sourceTree = "<group>"; };
+		B1000001000000000000000B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -83,6 +87,7 @@
 				B10000010000000000000004 /* HouseDetailView.swift */,
 				B10000010000000000000005 /* HouseEditView.swift */,
 				B10000010000000000000006 /* HouseComponents.swift */,
+				B1000001000000000000000B /* SettingsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -91,6 +96,7 @@
 			isa = PBXGroup;
 			children = (
 				B10000010000000000000007 /* MediaStore.swift */,
+				B1000001000000000000000A /* CosUploader.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -166,6 +172,8 @@
 				A10000010000000000000005 /* HouseEditView.swift in Sources */,
 				A10000010000000000000006 /* HouseComponents.swift in Sources */,
 				A10000010000000000000007 /* MediaStore.swift in Sources */,
+				A10000010000000000000009 /* CosUploader.swift in Sources */,
+				A1000001000000000000000A /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -226,12 +234,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDevelopmentRegion = "zh_CN";
 				INFOPLIST_KEY_CFBundleDisplayName = "房源管家";
-				INFOPLIST_KEY_CFBundleShortVersionString = "1.9";
+				INFOPLIST_KEY_CFBundleShortVersionString = "1.10";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -243,7 +251,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9;
+				MARKETING_VERSION = 1.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zfgj.housekeeper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -257,12 +265,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDevelopmentRegion = "zh_CN";
 				INFOPLIST_KEY_CFBundleDisplayName = "房源管家";
-				INFOPLIST_KEY_CFBundleShortVersionString = "1.9";
+				INFOPLIST_KEY_CFBundleShortVersionString = "1.10";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -274,7 +282,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9;
+				MARKETING_VERSION = 1.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zfgj.housekeeper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
