@@ -438,14 +438,14 @@ struct HouseDetailView: View {
     }
 }
 
-// MARK: - 分享值类型（Task 内安全传递，不触碰 SwiftData 模型）
+// MARK: - 分享值类型（Task 内安全传递 + 分享缓存 JSON 编解码，不触碰 SwiftData 模型）
 
-struct ShareMediaFile: Equatable {
+struct ShareMediaFile: Equatable, Codable {
     let name: String
     let kind: String
 }
 
-struct ShareHouseInfo: Equatable {
+struct ShareHouseInfo: Equatable, Codable {
     let displayRoomNo: String
     let towerLabel: String
     let layout: String
