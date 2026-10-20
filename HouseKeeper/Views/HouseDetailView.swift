@@ -80,27 +80,33 @@ struct HouseDetailView: View {
                 Spacer()
                 if house.hasPhoto || house.hasVideo {
                     if isSelecting {
-                        // 多选模式下：取消按钮（紧凑高度）
+                        // 多选模式：取消按钮（胶囊形，大小随文字自适应）
                         Button {
                             exitSelecting()
                         } label: {
                             Label("取消", systemImage: "xmark")
                                 .font(.subheadline.weight(.medium))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 2)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .background(Color(.systemGray5))
+                                .foregroundColor(.primary)
+                                .clipShape(Capsule())
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.plain)
                     } else {
-                        // 多选入口：按钮状（上下缩窄，不过高）
+                        // 多选入口（胶囊形，大小随文字自适应）
                         Button {
                             isSelecting = true
                         } label: {
                             Label("多选", systemImage: "checkmark.circle")
                                 .font(.subheadline.weight(.medium))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 2)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .background(AppTheme.primary)
+                                .foregroundColor(.white)
+                                .clipShape(Capsule())
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -172,7 +178,8 @@ struct HouseDetailView: View {
                                     toggleSelect(media)
                                 }
                         } else {
-                            HouseVideoPlayer(media: media, roomKey: house.mediaRoomKey)
+                            // 视频条目：缩略图 + 播放三角，点击全屏播放
+                            HouseDetailVideoItem(media: media, roomKey: house.mediaRoomKey)
                                 .frame(height: 200)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
@@ -305,7 +312,7 @@ struct HouseDetailView: View {
         .padding(.vertical, 9)
     }
 
-    // MARK: - 操作区
+    // MARK: - 操作区（三个按钮上下继续缩窄）
 
     private var actionCard: some View {
         VStack(spacing: 8) {
@@ -318,7 +325,7 @@ struct HouseDetailView: View {
                     Image(systemName: house.status == .available ? "checkmark.circle" : "arrow.uturn.backward.circle")
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                .padding(.vertical, 4)
             }
             .buttonStyle(.borderedProminent)
             .tint(house.status == .available ? Color(red: 0.24, green: 0.58, blue: 0.34) : Color(red: 0.47, green: 0.49, blue: 0.55))
@@ -329,7 +336,7 @@ struct HouseDetailView: View {
             } label: {
                 Label("分享", systemImage: "square.and.arrow.up")
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 4)
             }
             .buttonStyle(.bordered)
 
@@ -338,7 +345,7 @@ struct HouseDetailView: View {
             } label: {
                 Label("删除房源", systemImage: "trash")
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 4)
             }
             .buttonStyle(.bordered)
         }
@@ -380,71 +387,6 @@ struct HouseDetailView: View {
 struct PhotoPreviewRoute: Identifiable {
     let id = UUID()
     let index: Int
-}
-
-// MARK: - 视频播放器（持有 player，避免视图重建时频繁创建；长按可保存视频到相册）
-
-struct HouseVideoPlayer: View {
-    let media: MediaItem
-    let roomKey: String
-    @State private var player: AVPlayer?
-    @State private var saveMessage: String?
-
-    var body: some View {
-        VideoPlayer(player: player)
-            // 长按播放界面：保存视频到相册（和微信一致）
-            .contextMenu {
-                Button {
-                    saveVideoToAlbum()
-                } label: {
-                    Label("保存到相册", systemImage: "square.and.arrow.down")
-                }
-            }
-            .onAppear {
-                if player == nil {
-                    player = AVPlayer(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
-                }
-            }
-            .onDisappear {
-                player?.pause()
-                player = nil
-            }
-            .alert("保存到相册", isPresented: Binding(
-                get: { saveMessage != nil },
-                set: { if !$0 { saveMessage = nil } }
-            )) {
-                Button("好", role: .cancel) {}
-            } message: {
-                Text(saveMessage ?? "")
-            }
-    }
-
-    /// 保存当前视频到系统相册（仅新增写入权限）
-    private func saveVideoToAlbum() {
-        let url = MediaStore.url(for: media.fileName, roomKey: roomKey)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            saveMessage = "视频文件不存在，无法保存"
-            return
-        }
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-            switch status {
-            case .authorized, .limited:
-                PHPhotoLibrary.shared().performChanges {
-                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
-                } completionHandler: { success, error in
-                    DispatchQueue.main.async {
-                        saveMessage = success
-                            ? "已保存到相册"
-                            : "保存失败：\(error?.localizedDescription ?? "未知错误")"
-                    }
-                }
-            default:
-                DispatchQueue.main.async {
-                    saveMessage = "没有相册写入权限，请在 设置 → 隐私与安全 → 照片 中允许"
-                }
-            }
-        }
-    }
 }
 
 // MARK: - 照片大图预览
