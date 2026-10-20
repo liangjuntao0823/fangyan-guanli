@@ -92,7 +92,7 @@ extension House {
     /// 媒体存储目录名（按房号，去除文件系统非法字符）
     var mediaRoomKey: String {
         let raw = tower == 2 ? "2-\(roomNo)" : roomNo
-        let illegal = CharacterSet(charactersIn: "/:\\?%*|"<>")
+        let illegal = CharacterSet(charactersIn: "/:\\?%*|\u{22}<>") 
         return raw.components(separatedBy: illegal).joined(separator: "-")
     }
 
