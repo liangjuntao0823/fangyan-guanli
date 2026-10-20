@@ -1,3 +1,0 @@
-line1 double: "quoted1"
-line2 uni: \u{22}quoted2\u{22}
-line3 backslash: \ and end
