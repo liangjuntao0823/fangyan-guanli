@@ -13,6 +13,11 @@ struct HouseListView: View {
     @State private var houseToEdit: House?
     @State private var houseToDelete: House?
 
+    /// 当前 App 版本号（读自工程配置，如 1.9）
+    private var appVersion: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
+    }
+
     /// 筛选后的房源：默认待租，并按「座号 + 楼层 + 房号」升序排列（1座在前，同座先按楼层、再按房号从小到大）
     private var filteredHouses: [House] {
         houses
@@ -106,6 +111,17 @@ struct HouseListView: View {
 
     private var statsBar: some View {
         HStack(spacing: 12) {
+            // 左上角：版本号徽章
+            if !appVersion.isEmpty {
+                Text("v\(appVersion)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(AppTheme.primary.opacity(0.10))
+                    .clipShape(Capsule())
+            }
+
             Label {
                 Text("房源统计")
                     .font(.footnote)
