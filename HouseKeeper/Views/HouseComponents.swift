@@ -425,7 +425,18 @@ struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        // 空内容保护：UIActivityViewController 不接受空 activityItems，否则直接崩溃
+        let safeItems = items.isEmpty ? [""] : items
+        let controller = UIActivityViewController(activityItems: safeItems, applicationActivities: nil)
+        // iPad 上必须指定 popover 锚点，否则系统直接崩溃；iPhone 自动跳过
+        if UIDevice.current.userInterfaceIdiom == .pad,
+           let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let root = scene.windows.first?.rootViewController {
+            controller.popoverPresentationController?.sourceView = root.view
+            controller.popoverPresentationController?.sourceRect = CGRect(x: root.view.bounds.midX, y: root.view.bounds.midY, width: 0, height: 0)
+            controller.popoverPresentationController?.permittedArrowDirections = []
+        }
+        return controller
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
