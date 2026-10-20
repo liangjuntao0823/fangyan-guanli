@@ -3,6 +3,8 @@ import Foundation
 /// 房源照片 / 视频文件管理：按房号子目录存到 App 的 Documents/Media/<房号>/ 目录
 /// 数据库里只保存文件名，文件本体在磁盘，避免 SwiftData 存储膨胀
 /// Documents 已开启文件共享（UIFileSharingEnabled），可在 iOS「文件」App 中查看
+/// 文件命名规则：照片「房号-JPG-1.jpg / 房号-JPG-2.jpg …」，视频「房号-MOV-1.mov / 房号-MOV-2.mov …」
+///   （序号从 1 开始，取当前第一个空缺序号；删除后自动复用；旧版 UUID 命名的文件仍可正常读取）
 enum MediaStore {
     static let mediaDirectoryName = "Media"
 
@@ -20,18 +22,31 @@ enum MediaStore {
         return dir
     }
 
-    /// 保存二进制数据（照片转 JPEG 后调用），返回文件名
+    /// 生成「房号-类型-N.扩展名」序号文件名（N 从 1 开始，取当前第一个空缺序号）
+    private static func nextFileName(roomKey: String, tag: String, ext: String) -> String {
+        let dir = houseDirectory(roomKey: roomKey)
+        let existing = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        var n = 1
+        while existing.contains("\(roomKey)-\(tag)-\(n).\(ext)") {
+            n += 1
+        }
+        return "\(roomKey)-\(tag)-\(n).\(ext)"
+    }
+
+    /// 保存二进制数据（照片转 JPEG 后调用），返回文件名（房号-JPG-N.jpg）
     static func save(data: Data, ext: String, roomKey: String) -> String {
-        let fileName = "\(UUID().uuidString).\(ext)"
+        let cleanExt = ext.lowercased()
+        let fileName = nextFileName(roomKey: roomKey, tag: cleanExt.uppercased(), ext: cleanExt)
         let url = houseDirectory(roomKey: roomKey).appendingPathComponent(fileName)
         try? data.write(to: url)
         return fileName
     }
 
-    /// 保存临时文件（相册选中的视频等），拷贝到 App 目录，返回文件名
+    /// 保存临时文件（相册选中的视频等），拷贝到 App 目录，返回文件名（房号-MOV-N.扩展名）
     static func saveFile(from source: URL, roomKey: String) -> String {
         let ext = source.pathExtension.isEmpty ? "mov" : source.pathExtension
-        let fileName = "\(UUID().uuidString).\(ext)"
+        let cleanExt = ext.lowercased()
+        let fileName = nextFileName(roomKey: roomKey, tag: cleanExt.uppercased(), ext: cleanExt)
         let target = houseDirectory(roomKey: roomKey).appendingPathComponent(fileName)
         try? FileManager.default.copyItem(at: source, to: target)
         return fileName
