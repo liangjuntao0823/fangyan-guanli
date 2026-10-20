@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// 设置页：腾讯云 COS 配置（用于分享房源卡片链接）
+/// 设置页：腾讯云 COS 配置（用于分享房源卡片链接）+ 分享名片信息（v1.21：可编辑姓名/电话）
 /// v1.19：新增「自定义域名（可选）」——腾讯云 2024 年后新建桶默认域名会被微信识别成文件，
 /// 绑定自定义域名后微信才会把分享链接抓成网页卡片；域名留空则回退默认域名（仅兜底）
 /// v1.20：保存改为「保存并验证连接」——写入钥匙串成功后立即用当前配置向 COS 上传一个测试文件
 /// 并回读，真实连通才算保存成功；任何环节失败都会给出具体错误码（桶不存在/签名错误/域名未生效），
 /// 不再静默提示「已保存」；同时密钥写入失败也会明确报出。
+/// v1.21：新增「分享名片信息」——姓名、电话可编辑，用于分享 H5 页面的名片区块、微信卡片的描述
+/// （默认：梁涛 / 13288251132）
 struct SettingsView: View {
     @State private var bucket = ""
     @State private var region = "ap-hongkong"
@@ -15,17 +17,25 @@ struct SettingsView: View {
     @State private var savedTip: String?
     @State private var isVerifying = false
 
+    // v1.21：分享名片信息
+    @State private var shareName = ""
+    @State private var sharePhone = ""
+
     init() {
         let b = KeychainStore.load(KeychainKey.bucket) ?? ""
         let r = KeychainStore.load(KeychainKey.region) ?? "ap-hongkong"
         let i = KeychainStore.load(KeychainKey.secretId) ?? ""
         let k = KeychainStore.load(KeychainKey.secretKey) ?? ""
         let d = KeychainStore.load(KeychainKey.customDomain) ?? ""
+        let n = KeychainStore.load(KeychainKey.shareName) ?? "梁涛"
+        let p = KeychainStore.load(KeychainKey.sharePhone) ?? "13288251132"
         _bucket = State(initialValue: b)
         _region = State(initialValue: r)
         _secretId = State(initialValue: i)
         _secretKey = State(initialValue: k)
         _customDomain = State(initialValue: d)
+        _shareName = State(initialValue: n)
+        _sharePhone = State(initialValue: p)
     }
 
     var body: some View {
@@ -71,6 +81,24 @@ struct SettingsView: View {
                 Text("点击后 App 会用当前配置向云存储上传一个测试文件并回读，成功才提示「配置正确」；失败会直接告诉您具体原因。")
             }
 
+            // v1.21：分享名片信息（H5 页面名片区块 + 微信卡片描述）
+            Section("分享名片信息") {
+                TextField("姓名（默认：梁涛）", text: $shareName)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("电话（默认：13288251132）", text: $sharePhone)
+                    .keyboardType(.phonePad)
+                Button {
+                    saveShareProfile()
+                } label: {
+                    Text("保存名片信息")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(shareName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } footer: {
+                Text("姓名和电话会显示在分享 H5 页面的名片区、微信卡片的描述和「拨打电话/复制电话」按钮上。修改后再次分享会按新名片重新生成链接。")
+            }
+
             Section("开通步骤（简述）") {
                 Text("1. 打开 cloud.tencent.com 注册并实名认证；2. 开通「对象存储 COS」；3. 创建存储桶：名称建议 fangyuan88、地域选香港、访问权限选「私有读写」；4. 在「访问管理 CAM → API 密钥管理」新建密钥，得到 SecretId 和 SecretKey；5. 填到上方并保存。密钥只存在本机钥匙串，不会上传。")
                     .font(.footnote)
@@ -90,6 +118,19 @@ struct SettingsView: View {
         } message: {
             Text(savedTip ?? "")
         }
+    }
+
+    /// v1.21：保存分享名片信息（姓名/电话）到钥匙串
+    private func saveShareProfile() {
+        let name = shareName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let phone = sharePhone.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            savedTip = "姓名不能为空"
+            return
+        }
+        var ok = KeychainStore.save(name, for: KeychainKey.shareName)
+        ok = KeychainStore.save(phone, for: KeychainKey.sharePhone) && ok
+        savedTip = ok ? "名片信息已保存 ✅\n姓名：\(name)\n电话：\(phone.isEmpty ? "（未填，分享时用默认号）" : phone)" : "写入本机钥匙串失败，请重新保存一次"
     }
 
     private func saveAndVerify() {

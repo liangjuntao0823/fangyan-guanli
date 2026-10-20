@@ -11,7 +11,18 @@ struct HouseListView: View {
     @State private var layoutFilter: String? = nil
     @State private var showAdd = false
 
-    /// 当前 App 版本号（读自工程配置，如 1.11）
+    // v1.21：首页多选分享（一次选多套，每套单独生成一个分享卡片/链接）
+    @State private var isSelecting = false
+    @State private var selectedHouseIDs = Set<UUID>()
+    @State private var showShareModePicker = false
+    @State private var shareQueue: [URL] = []
+    @State private var shareIndex = 0
+    @State private var currentShareStep: ShareStep? = nil
+    @State private var isGenerating = false
+    @State private var generateTip = ""
+    @State private var shareError: String?
+
+    /// 当前 App 版本号（读自工程配置，如 1.21）
     private var appVersion: String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
     }
@@ -74,16 +85,72 @@ struct HouseListView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showAdd = true
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.body.weight(.semibold))
+                    if isSelecting {
+                        Button("取消") { exitMultiSelect() }
+                    } else {
+                        HStack(spacing: 14) {
+                            // v1.21：多选分享入口
+                            Button {
+                                isSelecting = true
+                            } label: {
+                                Image(systemName: "checkmark.circle")
+                            }
+                            Button {
+                                showAdd = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.body.weight(.semibold))
+                            }
+                        }
                     }
                 }
             }
             .sheet(isPresented: $showAdd) {
                 HouseEditView(house: nil)
+            }
+            // v1.21：多选分享——先选「脱敏 / 完整」，再逐套生成链接、依次弹分享面板
+            .confirmationDialog("选择分享方式", isPresented: $showShareModePicker, titleVisibility: .visible) {
+                Button("发给客户（隐藏版）") { generateShareQueue(mode: .masked) }
+                Button("发给同事（完整版）") { generateShareQueue(mode: .full) }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("已选 \(selectedHouseIDs.count) 套，每套单独生成一个分享卡片。隐藏版不显示房号/价格/房东，完整版显示全部信息。")
+            }
+            .sheet(item: $currentShareStep, onDismiss: {
+                // 上一张分享面板关闭后自动弹下一张；全部发完自动退出多选
+                if shareIndex < shareQueue.count - 1 {
+                    shareIndex += 1
+                    currentShareStep = ShareStep(url: shareQueue[shareIndex])
+                } else {
+                    exitMultiSelect()
+                }
+            }) { step in
+                ShareSheet(items: [step.url])
+            }
+            .overlay {
+                if isGenerating {
+                    ZStack {
+                        Color.black.opacity(0.35).ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .tint(.white)
+                            Text(generateTip)
+                                .font(.footnote)
+                                .foregroundColor(.white)
+                        }
+                        .padding(20)
+                        .background(Color.black.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                    }
+                }
+            }
+            .alert("无法分享", isPresented: Binding(
+                get: { shareError != nil },
+                set: { if !$0 { shareError = nil } }
+            )) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(shareError ?? "")
             }
         }
     }
@@ -243,7 +310,7 @@ struct HouseListView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 列表（点击卡片进入详情；已删除左滑菜单，编辑/已租/删除在详情页操作）
+    // MARK: - 列表（点击卡片进入详情；多选模式点击卡片切换选中；编辑/已租/删除在详情页操作）
 
     private var houseList: some View {
         Group {
@@ -263,20 +330,181 @@ struct HouseListView: View {
                 ScrollView {
                     LazyVStack(spacing: 10) {
                         ForEach(filteredHouses) { house in
-                            NavigationLink {
-                                HouseDetailView(house: house)
-                            } label: {
-                                HouseCardView(house: house)
+                            if isSelecting {
+                                // 多选模式：点击整卡切换选中，左上角勾选标记
+                                Button {
+                                    toggleHouseSelect(house)
+                                } label: {
+                                    HouseCardView(house: house)
+                                        .overlay(alignment: .topLeading) {
+                                            Image(systemName: selectedHouseIDs.contains(house.id) ? "checkmark.circle.fill" : "circle")
+                                                .font(.system(size: 22))
+                                                .foregroundColor(selectedHouseIDs.contains(house.id) ? AppTheme.primary : Color.white)
+                                                .shadow(radius: 2)
+                                                .padding(8)
+                                        }
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                NavigationLink {
+                                    HouseDetailView(house: house)
+                                } label: {
+                                    HouseCardView(house: house)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 20)
+                    .padding(.bottom, isSelecting ? 76 : 20)
                 }
             }
         }
+        // v1.21：多选模式底部操作栏
+        .safeAreaInset(edge: .bottom) {
+            if isSelecting {
+                HStack(spacing: 12) {
+                    Text("已选 \(selectedHouseIDs.count) 套")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(AppTheme.primary)
+                    Spacer()
+                    Button("全选") {
+                        selectAllFiltered()
+                    }
+                    .font(.subheadline)
+                    .disabled(selectedHouseIDs.count == filteredHouses.count)
+                    Button {
+                        startMultiShare()
+                    } label: {
+                        Text("分享（\(selectedHouseIDs.count)）")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AppTheme.primary)
+                    .disabled(selectedHouseIDs.isEmpty)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial)
+            }
+        }
     }
+
+    // MARK: - v1.21 多选分享
+
+    private func toggleHouseSelect(_ house: House) {
+        if selectedHouseIDs.contains(house.id) {
+            selectedHouseIDs.remove(house.id)
+        } else {
+            selectedHouseIDs.insert(house.id)
+        }
+    }
+
+    private func selectAllFiltered() {
+        for house in filteredHouses {
+            selectedHouseIDs.insert(house.id)
+        }
+    }
+
+    private func exitMultiSelect() {
+        isSelecting = false
+        selectedHouseIDs.removeAll()
+        shareQueue = []
+        shareIndex = 0
+        currentShareStep = nil
+    }
+
+    private func startMultiShare() {
+        guard !selectedHouseIDs.isEmpty else { return }
+        guard let config = CosConfig.load(), config.isValid else {
+            shareError = "请先点击左上角「设置」，填写云存储配置（腾讯云 COS）并保存验证，再分享卡片链接"
+            return
+        }
+        // 过滤出有素材的房源（无照片视频的无法生成卡片）
+        let shareable = houses.filter { selectedHouseIDs.contains($0.id) && !$0.mediaItems.isEmpty }
+        guard !shareable.isEmpty else {
+            shareError = "选中的房源都没有照片或视频，先编辑添加素材再分享"
+            return
+        }
+        showShareModePicker = true
+    }
+
+    /// 逐套生成分享链接（每套单独一个卡片/链接），全部生成后依次弹系统分享面板
+    /// 注意：Task 内只传值类型，绝不直接访问 SwiftData @Model（跨线程读取模型会闪退）
+    private func generateShareQueue(mode: ShareMode) {
+        guard let config = CosConfig.load(), config.isValid else {
+            shareError = "请先点击左上角「设置」，填写云存储配置（腾讯云 COS）并保存验证，再分享卡片链接"
+            return
+        }
+        let shareable = houses.filter { selectedHouseIDs.contains($0.id) && !$0.mediaItems.isEmpty }
+        guard !shareable.isEmpty else {
+            shareError = "选中的房源都没有照片或视频，先编辑添加素材再分享"
+            return
+        }
+        let profile = CosUploader.loadShareProfile()
+        let sortedShareable = shareable.sorted { a, b in
+            if a.tower != b.tower { return a.tower < b.tower }
+            if a.floorNumber != b.floorNumber { return a.floorNumber < b.floorNumber }
+            if a.roomNumber != b.roomNumber { return a.roomNumber < b.roomNumber }
+            return a.roomNo < b.roomNo
+        }
+
+        isGenerating = true
+        generateTip = "正在生成分享卡片（1/\(sortedShareable.count)）…"
+
+        Task {
+            var urls: [URL] = []
+            var firstError: String?
+            for (index, house) in sortedShareable.enumerated() {
+                // 主线程先拷贝值类型（Task 闭包外捕获）
+                let files = house.mediaItems.map { ShareMediaFile(name: $0.fileName, kind: $0.kind) }
+                let roomKey = house.mediaRoomKey
+                let info = ShareHouseInfo(
+                    displayRoomNo: house.displayRoomNo,
+                    towerLabel: house.towerLabel,
+                    layout: house.layout,
+                    statusLabel: house.status.label,
+                    priceText: house.priceText,
+                    landlord: house.landlord,
+                    password: house.password,
+                    remark: house.remark,
+                    name: profile.name,
+                    phone: profile.phone
+                )
+                do {
+                    let url = try await CosUploader.shareCard(mediaFiles: files, roomKey: roomKey, info: info, mode: mode, config: config)
+                    urls.append(url)
+                } catch {
+                    if firstError == nil { firstError = error.localizedDescription }
+                }
+                let done = index + 1
+                let tip = "正在生成分享卡片（\(done)/\(sortedShareable.count)）…"
+                await MainActor.run { generateTip = tip }
+            }
+
+            await MainActor.run {
+                isGenerating = false
+                if urls.isEmpty {
+                    shareError = firstError ?? "生成分享链接失败，请重试"
+                    exitMultiSelect()
+                    return
+                }
+                if let firstError, urls.count < sortedShareable.count {
+                    shareError = "有 \(sortedShareable.count - urls.count) 套生成失败（\(firstError)），已生成 \(urls.count) 套"
+                }
+                shareQueue = urls
+                shareIndex = 0
+                currentShareStep = ShareStep(url: urls[0])
+            }
+        }
+    }
+}
+
+// MARK: - 多选分享步骤（sheet(item:) 依次弹分享面板）
+
+struct ShareStep: Identifiable {
+    let id = UUID()
+    let url: URL
 }
 
 #Preview {
