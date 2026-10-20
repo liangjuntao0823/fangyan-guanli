@@ -89,8 +89,9 @@ jobs:
       - name: Build for generic iOS device
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           rm -rf "$DERIVED_DATA_PATH"
+          set +e
           xcodebuild \
             -project "$PROJECT_PATH" \
             -scheme "$SCHEME" \
@@ -100,7 +101,18 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            clean build
+            clean build > xcodebuild.log 2>&1
+          RC=$?
+          set -e
+          if [[ $RC -ne 0 ]]; then
+            echo "::group::BUILD ERRORS"
+            grep -n -E "error:|warning:|fatal|BUILD FAILED|Undefined|expected|cannot" xcodebuild.log | head -80 || true
+            echo "::endgroup::"
+            echo "::group::BUILD TAIL"
+            tail -40 xcodebuild.log || true
+            echo "::endgroup::"
+            exit $RC
+          fi
       - name: Ad-hoc sign App
         shell: bash
         env:
