@@ -420,6 +420,24 @@ struct HouseDetailView: View {
     }
 }
 
+// MARK: - 分享值类型（COS 上传 CosUploader.shareCard 仍引用，保留定义）
+
+struct ShareMediaFile: Equatable {
+    let name: String
+    let kind: String
+}
+
+struct ShareHouseInfo: Equatable {
+    let displayRoomNo: String
+    let towerLabel: String
+    let layout: String
+    let statusLabel: String
+    let priceText: String
+    let landlord: String
+    let password: String
+    let remark: String
+}
+
 // MARK: - 照片大图预览路由
 
 struct PhotoPreviewRoute: Identifiable {
