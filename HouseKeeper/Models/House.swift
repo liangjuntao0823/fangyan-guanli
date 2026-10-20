@@ -84,9 +84,10 @@ final class MediaItem {
 extension House {
     var towerLabel: String { "\(tower)座" }
 
-    /// 房号展示：2座带「2-」前缀，1座不带
+    /// 房号展示：2座带「2-」前缀，1座不带（1座若录入时带了「1-」前缀则原样显示，兼容历史数据）
     var displayRoomNo: String {
-        tower == 2 ? "2-\(roomNo)" : roomNo
+        if tower == 2 && !roomNo.hasPrefix("2-") { return "2-\(roomNo)" }
+        return roomNo
     }
 
     /// 媒体存储目录名（按房号，去除文件系统非法字符）
@@ -96,21 +97,25 @@ extension House {
         return raw.components(separatedBy: illegal).joined(separator: "-")
     }
 
+    /// 房号数字串（兼容「1-2334」「2-1006」「634上」「2355下」等写法：
+    /// 从末尾反向提取连续数字，忽略座号前缀与「上/下/层」等后缀）
+    private var sortDigits: String {
+        String(roomNo.reversed().prefix { $0.isNumber }.reversed())
+    }
+
     /// 楼层（用于首页按「座号 + 楼层 + 房号」升序排序）：
     ///  - 3 位房号（如 634）：第 1 位是楼层 → 6楼34号
     ///  - 4 位房号（如 1420）：前 2 位是楼层 → 14楼20号
-    /// 统一规则：房号数字的最后 2 位是房号，前面剩余位是楼层
+    /// 统一规则：数字最后 2 位是房号，前面剩余位是楼层
     var floorNumber: Int {
-        let digits = roomNo.prefix { $0.isNumber }
-        let s = String(digits)
+        let s = sortDigits
         guard s.count >= 3 else { return Int(s) ?? 0 }
         return Int(s.dropLast(2)) ?? 0
     }
 
     /// 房号数字（数字部分最后 2 位，如 634 → 34，1420 → 20）
     var roomNumber: Int {
-        let digits = roomNo.prefix { $0.isNumber }
-        let s = String(digits)
+        let s = sortDigits
         guard s.count >= 2 else { return Int(s) ?? 0 }
         return Int(s.suffix(2)) ?? 0
     }
