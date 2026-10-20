@@ -2,7 +2,46 @@ import Foundation
 import CryptoKit
 import Security
 
-// MARK: - 云存储配置（腾讯云 COS，存于系统钥匙串）
+// MARK: - 钥匙串存取（COS 密钥等敏感配置）
+
+enum KeychainKey {
+    static let bucket = "cos.bucket"
+    static let region = "cos.region"
+    static let secretId = "cos.secretId"
+    static let secretKey = "cos.secretKey"
+}
+
+enum KeychainStore {
+    private static let service = "com.zfgj.housekeeper"
+
+    static func save(_ value: String, for key: String) {
+        let data = Data(value.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data
+        ]
+        SecItemDelete(query as CFDictionary)
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    static func load(_ key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
+// MARK: - COS 配置
 
 struct CosConfig {
     let bucket: String
@@ -14,239 +53,235 @@ struct CosConfig {
         !bucket.isEmpty && !region.isEmpty && !secretId.isEmpty && !secretKey.isEmpty
     }
 
+    /// 从钥匙串读取配置
     static func load() -> CosConfig? {
-        let b = KeychainStore.load(KeychainKey.bucket) ?? \u{22}\u{22}
-        let r = KeychainStore.load(KeychainKey.region) ?? \u{22}\u{22}
-        let i = KeychainStore.load(KeychainKey.secretId) ?? \u{22}\u{22}
-        let k = KeychainStore.load(KeychainKey.secretKey) ?? \u{22}\u{22}
-        return CosConfig(bucket: b, region: r, secretId: i, secretKey: k)
+        let bucket = KeychainStore.load(KeychainKey.bucket) ?? ""
+        let region = KeychainStore.load(KeychainKey.region) ?? ""
+        let secretId = KeychainStore.load(KeychainKey.secretId) ?? ""
+        let secretKey = KeychainStore.load(KeychainKey.secretKey) ?? ""
+        let config = CosConfig(bucket: bucket, region: region, secretId: secretId, secretKey: secretKey)
+        return config.isValid ? config : nil
     }
 }
 
-enum KeychainKey {
-    static let bucket = \u{22}cosBucket\u{22}
-    static let region = \u{22}cosRegion\u{22}
-    static let secretId = \u{22}cosSecretId\u{22}
-    static let secretKey = \u{22}cosSecretKey\u{22}
-}
-
-enum KeychainStore {
-    private static func baseQuery(_ key: String) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: \u{22}com.zfgj.housekeeper\u{22},
-         kSecAttrAccount as String: key]
-    }
-
-    static func save(_ value: String, for key: String) {
-        var q = baseQuery(key)
-        SecItemDelete(q as CFDictionary)
-        q[kSecValueData as String] = Data(value.utf8)
-        SecItemAdd(q as CFDictionary, nil)
-    }
-
-    static func load(_ key: String) -> String? {
-        var q = baseQuery(key)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-}
-
-// MARK: - 腾讯云 COS 直传（V5 预签名 URL，零第三方依赖）
-
-enum CosError: LocalizedError {
-    case invalidConfig
-    case uploadFailed
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidConfig:
-            return \u{22}云存储配置无效，请在首页左上角「设置」里检查存储桶、地域和密钥\u{22}
-        case .uploadFailed:
-            return \u{22}上传失败，请检查存储桶名称、地域和密钥是否正确\u{22}
-        }
-    }
-}
+// MARK: - 腾讯云 COS V5 预签名上传（HMAC-SHA1，零第三方依赖）
 
 enum CosUploader {
-    /// 分享链接有效期（30 天）
-    static let shareExpiry: TimeInterval = 30 * 24 * 3600
 
-    private static func host(bucket: String, region: String) -> String {
-        bucket + \u{22}.cos.\u{22} + region + \u{22}.myqcloud.com\u{22}
-    }
+    enum CosError: LocalizedError {
+        case invalidConfig
+        case missingMedia
+        case uploadFailed(String)
+        case responseInvalid
 
-    private static func encodePath(_ p: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: \u{22}/-._~\u{22}))
-        return p.addingPercentEncoding(withAllowedCharacters: allowed) ?? p
-    }
-
-    private static func sha1Hex(_ s: String) -> String {
-        let h = Insecure.SHA1.hash(data: Data(s.utf8))
-        return h.map { String(format: \u{22}%02x\u{22}, $0) }.joined()
-    }
-
-    /// 生成 COS V5 预签名 URL（GET / PUT）
-    static func presignedURL(method: String, bucket: String, region: String, secretId: String, secretKey: String, path: String, expiry: TimeInterval) -> URL? {
-        let now = Int(Date().timeIntervalSince1970)
-        let end = now + Int(expiry)
-        let keyTime = \u{22}\(now);\(end)\u{22}
-        let signTime = keyTime
-        let hst = host(bucket: bucket, region: region)
-        let uri = encodePath(path)
-        let headers = [\u{22}host\u{22}: hst]
-        let headerKeys = headers.keys.sorted()
-        let canonicalHeaders = headerKeys.map { $0.lowercased() + \u{22}=\u{22} + (headers[$0] ?? \u{22}\u{22}) + \u{22}\n\u{22} }.joined()
-        let headerList = headerKeys.map { $0.lowercased() }.joined(separator: \u{22};\u{22})
-        let canonicalRequest = method + \u{22}\n\u{22} + uri + \u{22}\n\n\u{22} + canonicalHeaders + \u{22}\n\u{22} + headerList
-        let stringToSign = \u{22}sha1\n\u{22} + signTime + \u{22}\n\u{22} + sha1Hex(canonicalRequest) + \u{22}\n\u{22}
-        let signKey = HMAC<Insecure.SHA1>.authenticationCode(for: Data(keyTime.utf8), using: SymmetricKey(data: Data(secretKey.utf8)))
-        let signature = HMAC<Insecure.SHA1>.authenticationCode(for: Data(stringToSign.utf8), using: SymmetricKey(data: Data(signKey)))
-        let sigHex = signature.map { String(format: \u{22}%02x\u{22}, $0) }.joined()
-        let query = \u{22}q-sign-algorithm=sha1&q-ak=\u{22} + secretId + \u{22}&q-sign-time=\u{22} + signTime + \u{22}&q-key-time=\u{22} + keyTime + \u{22}&q-header-list=\u{22} + headerList + \u{22}&q-url-param-list=&q-signature=\u{22} + sigHex
-        var comps = URLComponents()
-        comps.scheme = \u{22}https\u{22}
-        comps.host = hst
-        comps.percentEncodedPath = uri
-        comps.percentEncodedQuery = query
-        return comps.url
-    }
-
-    static func upload(data: Data, contentType: String, to url: URL) async throws {
-        var req = URLRequest(url: url)
-        req.httpMethod = \u{22}PUT\u{22}
-        req.setValue(contentType, forHTTPHeaderField: \u{22}Content-Type\u{22})
-        req.httpBody = data
-        let (_, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw CosError.uploadFailed
-        }
-    }
-
-    static func mimeType(for fileName: String) -> String {
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        switch ext {
-        case \u{22}jpg\u{22}, \u{22}jpeg\u{22}: return \u{22}image/jpeg\u{22}
-        case \u{22}png\u{22}: return \u{22}image/png\u{22}
-        case \u{22}heic\u{22}: return \u{22}image/heic\u{22}
-        case \u{22}mp4\u{22}: return \u{22}video/mp4\u{22}
-        case \u{22}mov\u{22}: return \u{22}video/quicktime\u{22}
-        case \u{22}html\u{22}: return \u{22}text/html; charset=utf-8\u{22}
-        default: return \u{22}application/octet-stream\u{22}
-        }
-    }
-
-    // MARK: - 生成并上传房源分享卡片
-
-    static func shareCard(for house: House, config: CosConfig) async throws -> URL {
-        let roomKey = house.mediaRoomKey
-        let base = \u{22}h/\u{22} + roomKey
-
-        // 1. 上传素材（图片 + 视频）
-        for media in house.mediaItems {
-            let local = MediaStore.url(for: media.fileName, roomKey: roomKey)
-            guard FileManager.default.fileExists(atPath: local.path) else { continue }
-            let data = try Data(contentsOf: local)
-            let path = base + \u{22}/\u{22} + media.fileName
-            guard let put = presignedURL(method: \u{22}PUT\u{22}, bucket: config.bucket, region: config.region, secretId: config.secretId, secretKey: config.secretKey, path: path, expiry: 3600) else {
-                throw CosError.invalidConfig
+        var errorDescription: String? {
+            switch self {
+            case .invalidConfig:
+                return "云存储配置不完整，请先在设置页填写"
+            case .missingMedia:
+                return "这套房源还没有照片或视频，先编辑添加素材再分享"
+            case .uploadFailed(let msg):
+                return "上传失败：" + msg
+            case .responseInvalid:
+                return "上传服务返回异常，请稍后重试"
             }
-            try await upload(data: data, contentType: mimeType(for: media.fileName), to: put)
         }
-
-        // 2. 素材 GET 预签名 URL（30 天）
-        let imageURLs = house.photos.compactMap { m -> URL? in
-            presignedURL(method: \u{22}GET\u{22}, bucket: config.bucket, region: config.region, secretId: config.secretId, secretKey: config.secretKey, path: base + \u{22}/\u{22} + m.fileName, expiry: shareExpiry)
-        }
-        let videoURLs = house.videos.compactMap { m -> URL? in
-            presignedURL(method: \u{22}GET\u{22}, bucket: config.bucket, region: config.region, secretId: config.secretId, secretKey: config.secretKey, path: base + \u{22}/\u{22} + m.fileName, expiry: shareExpiry)
-        }
-
-        // 3. 生成 H5 页面
-        let html = buildHTML(house: house, imageURLs: imageURLs.map(\.absoluteString), videoURLs: videoURLs.map(\.absoluteString))
-
-        // 4. 上传 H5 页面
-        let htmlPath = base + \u{22}/index.html\u{22}
-        guard let putHtml = presignedURL(method: \u{22}PUT\u{22}, bucket: config.bucket, region: config.region, secretId: config.secretId, secretKey: config.secretKey, path: htmlPath, expiry: 3600) else {
-            throw CosError.invalidConfig
-        }
-        try await upload(data: Data(html.utf8), contentType: mimeType(for: \u{22}index.html\u{22}), to: putHtml)
-
-        // 5. 页面分享链接
-        guard let share = presignedURL(method: \u{22}GET\u{22}, bucket: config.bucket, region: config.region, secretId: config.secretId, secretKey: config.secretKey, path: htmlPath, expiry: shareExpiry) else {
-            throw CosError.invalidConfig
-        }
-        return share
     }
 
-    // MARK: - H5 页面模板
+    /// 为房源生成 H5 分享卡片：上传所有媒体 → 生成 index.html → 上传 → 返回 30 天有效链接
+    static func shareCard(for house: House, config: CosConfig) async throws -> String {
+        let media = house.mediaItems
+        guard !media.isEmpty else { throw CosError.missingMedia }
 
-    static func escapeHTML(_ s: String) -> String {
-        s.replacingOccurrences(of: \u{22}&\u{22}, with: \u{22}&amp;\u{22})
-         .replacingOccurrences(of: \u{22}<\u{22}, with: \u{22}&lt;\u{22})
-         .replacingOccurrences(of: \u{22}>\u{22}, with: \u{22}&gt;\u{22})
-         .replacingOccurrences(of: \u{22}'\u{22}, with: \u{22}&#39;\u{22})
+        let roomKey = house.mediaRoomKey  // 房号目录名（安全文件名）
+
+        // 1. 逐个上传媒体
+        var mediaTags: [String] = []
+        for item in media {
+            let url = MediaStore.url(for: item.fileName, roomKey: roomKey)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            let data = try Data(contentsOf: url)
+            let remotePath = "h/\(roomKey)/\(item.fileName)"
+            try await upload(data: data, to: remotePath, contentType: mimeType(for: item.kind), config: config)
+            if item.kind == "video" {
+                mediaTags.append("<video class=\"v\" controls playsinline preload=\"metadata\" poster=\"\(remotePath)\" src=\"\(remotePath)\"></video>")
+            } else {
+                mediaTags.append("<img class=\"p\" src=\"\(remotePath)\">")
+            }
+        }
+        guard !mediaTags.isEmpty else { throw CosError.missingMedia }
+
+        // 2. 生成 index.html（带 og 标签，微信抓取卡片）
+        let title = "\(house.displayRoomNo) · \(house.layout.isEmpty ? "房源" : house.layout)"
+        let desc = "\(house.priceText) · \(house.landlord.isEmpty ? "房东信息见页内" : house.landlord)"
+        // 封面用第一张图（微信要求 og:image 为长期有效 URL；预签名 URL 30 天有效期内可用）
+        let cover = mediaTags.first { $0.contains("img") } ?? ""
+        let coverSrc = cover.isEmpty ? "" : extractSrc(from: cover)
+
+        let html = buildHTML(
+            title: title,
+            desc: desc,
+            roomNo: house.displayRoomNo,
+            towerLabel: house.towerLabel,
+            layout: house.layout,
+            statusLabel: house.status.label,
+            priceText: house.priceText,
+            landlord: house.landlord,
+            password: house.password,
+            remark: house.remark,
+            mediaTags: mediaTags,
+            coverSrc: coverSrc
+        )
+        let htmlData = Data(html.utf8)
+        let htmlPath = "h/\(roomKey)/index.html"
+        try await upload(data: htmlData, to: htmlPath, contentType: "text/html; charset=utf-8", config: config)
+
+        // 3. 返回 index.html 的 30 天 GET 预签名 URL
+        return try presignedGetURL(for: htmlPath, expires: 30 * 86400, config: config)
     }
 
-    static func buildHTML(house: House, imageURLs: [String], videoURLs: [String]) -> String {
-        let title = house.displayRoomNo + \u{22} \u{22} + (house.layout.isEmpty ? \u{22}\u{22} : house.layout)
-        let priceLine = house.price > 0 ? \u{22}\(house.price)元/月\u{22} : \u{22}价格面议\u{22}
-        let landlordLine = house.landlord.isEmpty ? \u{22}—\u{22} : house.landlord
-        let statusLine = house.status == .available ? \u{22}待租（可带看）\u{22} : \u{22}已租\u{22}
-        let ogImage = imageURLs.first ?? \u{22}\u{22}
-        let ogDesc = priceLine + \u{22} · 房东 \u{22} + landlordLine + \u{22} · \u{22} + statusLine
+    private static func extractSrc(from tag: String) -> String {
+        guard let start = tag.range(of: "src=\"")?.upperBound else { return "" }
+        guard let end = tag[start...].range(of: "\"")?.lowerBound else { return "" }
+        return String(tag[start..<end])
+    }
 
-        var imgs = \u{22}\u{22}
-        for u in imageURLs {
-            imgs += \u{22}<img src='\u{22} + escapeHTML(u) + \u{22}' loading='lazy' />\n\u{22}
-        }
-        var vids = \u{22}\u{22}
-        for u in videoURLs {
-            vids += \u{22}<div class='vid'><video controls playsinline preload='metadata' src='\u{22} + escapeHTML(u) + \u{22}'></video></div>\n\u{22}
-        }
+    // MARK: - HTML 模板
 
-        var passwordHTML = \u{22}\u{22}
-        if !house.password.isEmpty {
-            passwordHTML = \u{22}<div class='row'><span class='k'>密码</span><span class='v'>\u{22} + escapeHTML(house.password) + \u{22}</span></div>\n\u{22}
-        }
-        var remarkHTML = \u{22}\u{22}
-        if !house.remark.isEmpty {
-            remarkHTML = \u{22}<div class='row'><span class='k'>备注</span><span class='v'>\u{22} + escapeHTML(house.remark) + \u{22}</span></div>\n\u{22}
-        }
+    private static func buildHTML(title: String, desc: String, roomNo: String, towerLabel: String, layout: String, statusLabel: String, priceText: String, landlord: String, password: String, remark: String, mediaTags: [String], coverSrc: String) -> String {
+        let hero = """
+        <div class="hero">
+          <div class="badge">\(escapeHTML(statusLabel))</div>
+          <h1>\(escapeHTML(roomNo))</h1>
+          <p class="sub">\(escapeHTML(towerLabel)) · \(escapeHTML(layout))</p>
+          <p class="price">\(escapeHTML(priceText))</p>
+        </div>
+        """
+        let info = """
+        <div class="info">
+          <div class="row"><span>房东</span><b>\(escapeHTML(landlord))</b></div>
+          <div class="row"><span>密码</span><b>\(escapeHTML(password))</b></div>
+          <div class="row"><span>备注</span><b>\(escapeHTML(remark))</b></div>
+        </div>
+        """
+        let grid = "<div class=\"grid\">" + mediaTags.joined(separator: "") + "</div>"
+        let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
+        return """
+        <!DOCTYPE html>
+        <html lang="zh-CN">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta property="og:title" content="\(escapeHTML(title))">
+        <meta property="og:description" content="\(escapeHTML(desc))">
+        \(coverMeta)
+        <title>\(escapeHTML(title))</title>
+        <style>
+        body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;margin:0;background:#f4f5f7;color:#1c1c1e;}
+        .wrap{max-width:640px;margin:0 auto;padding:16px;}
+        .hero{background:linear-gradient(135deg,#1f3a5f,#2d5f8a);color:#fff;border-radius:16px;padding:24px 20px;}
+        .badge{display:inline-block;background:rgba(255,255,255,.2);border-radius:999px;padding:4px 12px;font-size:13px;}
+        h1{margin:12px 0 4px;font-size:28px;}
+        .sub{color:rgba(255,255,255,.85);margin:0 0 10px;font-size:14px;}
+        .price{font-size:22px;font-weight:700;margin:0;}
+        .info{background:#fff;border-radius:16px;padding:6px 16px;margin:12px 0;}
+        .row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f0f0f0;font-size:15px;}
+        .row:last-child{border-bottom:none;}
+        .row span{color:#8e8e93;}
+        .grid{background:#fff;border-radius:16px;padding:12px;margin:12px 0;}
+        .grid img{width:100%;border-radius:10px;margin-bottom:8px;display:block;}
+        .grid video{width:100%;border-radius:10px;margin-bottom:8px;display:block;}
+        .foot{text-align:center;color:#8e8e93;font-size:12px;padding:16px 0 28px;}
+        </style>
+        </head>
+        <body>
+        <div class="wrap">
+        \(hero)
+        \(info)
+        \(grid)
+        <div class="foot">房源管家 · 分享链接 30 天内有效</div>
+        </div>
+        </body>
+        </html>
+        """
+    }
 
-        let css = \u{22}<style>body{margin:0;padding:0;font-family:-apple-system,'PingFang SC','Helvetica Neue',sans-serif;background:#f2f3f5;color:#1f2328}.wrap{max-width:640px;margin:0 auto;padding:16px}.hero{background:linear-gradient(135deg,#0f5a8a,#1e88c7);color:#fff;border-radius:14px;padding:18px 16px}.hero .no{font-size:24px;font-weight:700}.hero .sub{font-size:14px;opacity:.9;margin-top:6px}.hero .tag{display:inline-block;margin-top:10px;font-size:13px;background:rgba(255,255,255,.22);padding:4px 12px;border-radius:999px}.card{background:#fff;border-radius:14px;padding:14px;margin-top:12px}.row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #f0f0f0;font-size:15px}.row:last-child{border-bottom:none}.k{color:#8a9199}.v{font-weight:600;text-align:right;padding-left:12px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block}.vid{margin-top:10px}.vid video{width:100%;border-radius:10px;background:#000}.foot{margin:18px 0 26px;text-align:center;font-size:12px;color:#a0a6ad}</style>\u{22}
+    private static func escapeHTML(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+    }
 
-        var lines: [String] = []
-        lines.append(\u{22}<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>\u{22})
-        lines.append(\u{22}<title>\u{22} + escapeHTML(title) + \u{22}</title>\u{22})
-        lines.append(\u{22}<meta property='og:title' content='\u{22} + escapeHTML(title) + \u{22}' />\u{22})
-        lines.append(\u{22}<meta property='og:description' content='\u{22} + escapeHTML(ogDesc) + \u{22}' />\u{22})
-        if !ogImage.isEmpty {
-            lines.append(\u{22}<meta property='og:image' content='\u{22} + escapeHTML(ogImage) + \u{22}' />\u{22})
+    // MARK: - 上传 / 预签名
+
+    private static func mimeType(for kind: String) -> String {
+        kind == "video" ? "video/quicktime" : "image/jpeg"
+    }
+
+    private static func upload(data: Data, to remotePath: String, contentType: String, config: CosConfig) async throws {
+        let url = try presignedPutURL(for: remotePath, config: config)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.httpBody = data
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw CosError.uploadFailed("HTTP \(String(describing: (response as? HTTPURLResponse)?.statusCode))")
         }
-        lines.append(css)
-        lines.append(\u{22}</head><body><div class='wrap'>\u{22})
-        lines.append(\u{22}<div class='hero'><div class='no'>\u{22} + escapeHTML(house.displayRoomNo) + \u{22}</div><div class='sub'>\u{22} + escapeHTML(house.towerLabel) + \u{22} · \u{22} + escapeHTML(house.layout.isEmpty ? \u{22}户型未填\u{22} : house.layout) + \u{22}</div><span class='tag'>\u{22} + escapeHTML(statusLine) + \u{22}</span></div>\u{22})
-        lines.append(\u{22}<div class='card'>\u{22})
-        lines.append(\u{22}<div class='row'><span class='k'>价格</span><span class='v'>\u{22} + escapeHTML(priceLine) + \u{22}</span></div>\n\u{22})
-        lines.append(\u{22}<div class='row'><span class='k'>房东</span><span class='v'>\u{22} + escapeHTML(landlordLine) + \u{22}</span></div>\n\u{22})
-        lines.append(\u{22}<div class='row'><span class='k'>户型</span><span class='v'>\u{22} + escapeHTML(house.layout.isEmpty ? \u{22}—\u{22} : house.layout) + \u{22}</span></div>\n\u{22})
-        lines.append(passwordHTML)
-        lines.append(remarkHTML)
-        lines.append(\u{22}</div>\u{22})
-        if !imgs.isEmpty {
-            lines.append(\u{22}<div class='card'><div class='grid'>\u{22})
-            lines.append(imgs)
-            lines.append(\u{22}</div></div>\u{22})
-        }
-        if !vids.isEmpty {
-            lines.append(vids)
-        }
-        lines.append(\u{22}<div class='foot'>房源管家 · 分享链接 30 天内有效</div>\u{22})
-        lines.append(\u{22}</div></body></html>\u{22})
-        return lines.joined(separator: \u{22}\n\u{22})
+    }
+
+    private static func host(for config: CosConfig) -> String {
+        "\(config.bucket).cos.\(config.region).myqcloud.com"
+    }
+
+    private static func presignedPutURL(for path: String, config: CosConfig) throws -> URL {
+        try presignedURL(for: path, method: "PUT", expires: 3600, config: config)
+    }
+
+    private static func presignedGetURL(for path: String, expires: Int, config: CosConfig) throws -> URL {
+        try presignedURL(for: path, method: "GET", expires: expires, config: config)
+    }
+
+    /// COS V5 签名：q-sign-algorithm=sha1;q-ak=...;q-sign-time=...;q-key-time=...;q-header-list=...;q-url-param-list=...;q-signature=...
+    private static func presignedURL(for path: String, method: String, expires: Int, config: CosConfig) throws -> URL {
+        let now = Int(Date().timeIntervalSince1970)
+        let signTime = "\(now);\(now + expires)"
+        let keyTime = signTime
+
+        let hostValue = host(for: config)
+        let pathWithSlash = "/" + path
+        let canonicalQuery = ""
+        let headerList = "host"
+        let headerValue = "host=\(hostValue.lowercased())"
+
+        let signKey = HMAC_SHA1(key: config.secretKey, message: keyTime)
+        let httpString = "\(method.lowercased())\n\(pathWithSlash)\n\n\n\(headerValue)\n"
+        let sha1Http = SHA1(hexString: httpString)
+        let stringToSign = "sha1\n\(signTime)\n\(sha1Http)\n"
+        let signature = HMAC_SHA1(key: signKey, message: stringToSign)
+
+        var comps = URLComponents()
+        comps.scheme = "https"
+        comps.host = hostValue
+        comps.percentEncodedPath = pathWithSlash
+        comps.percentEncodedQuery = "q-sign-algorithm=sha1&q-ak=\(config.secretId)&q-sign-time=\(signTime)&q-key-time=\(keyTime)&q-header-list=\(headerList)&q-url-param-list=&q-signature=\(signature)"
+        guard let url = comps.url else { throw CosError.invalidConfig }
+        return url
+    }
+
+    // MARK: - 加密原语（HMAC-SHA1 / SHA1 hex）
+
+    private static func HMAC_SHA1(key: String, message: String) -> String {
+        let keyData = Data(key.utf8)
+        let msgData = Data(message.utf8)
+        let mac = HMAC<Insecure.SHA1>.authenticationCode(for: msgData, using: SymmetricKey(data: keyData))
+        return mac.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func SHA1(hexString: String) -> String {
+        let data = Data(hexString.utf8)
+        return Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
