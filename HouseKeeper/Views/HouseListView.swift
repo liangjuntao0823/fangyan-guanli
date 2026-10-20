@@ -11,8 +11,13 @@ struct HouseListView: View {
     @State private var layoutFilter: String? = nil
     @State private var showAdd = false
     @State private var houseToDelete: House?
+    @State private var detailHouse: House?
+    @State private var showDetail = false
+    @State private var editHouse: House?
+    @State private var showEdit = false
 
-    /// 筛选后的房源：默认待租，并按「座号 + 房号」升序排列（1座在前，同座按房号数字从小到大）
+    /// 筛选后的房源：默认待租，并按「座号 + 楼层 + 房号」升序排列
+    /// 楼层规则：3位数首位为楼层（634 → 6楼34号），4位数前两位为楼层（1420 → 14楼20号）
     private var filteredHouses: [House] {
         houses
             .filter { house in
@@ -32,8 +37,9 @@ struct HouseListView: View {
             }
             .sorted { a, b in
                 if a.tower != b.tower { return a.tower < b.tower }
-                if a.sortRoomNo != b.sortRoomNo { return a.sortRoomNo < b.sortRoomNo }
-                // 同号同层（如 1420上 / 1420下）：按原始房号字符串稳定排序
+                if a.floorNumber != b.floorNumber { return a.floorNumber < b.floorNumber }
+                if a.roomNumber != b.roomNumber { return a.roomNumber < b.roomNumber }
+                // 同楼层同房号（如 1420上 / 1420下）：按原始房号字符串稳定排序
                 return a.roomNo < b.roomNo
             }
     }
@@ -72,6 +78,16 @@ struct HouseListView: View {
             }
             .sheet(isPresented: $showAdd) {
                 HouseEditView(house: nil)
+            }
+            .sheet(isPresented: $showEdit) {
+                if let house = editHouse {
+                    HouseEditView(house: house)
+                }
+            }
+            .navigationDestination(isPresented: $showDetail) {
+                if let house = detailHouse {
+                    HouseDetailView(house: house)
+                }
             }
             .confirmationDialog("删除这套房源？", isPresented: Binding(
                 get: { houseToDelete != nil },
@@ -232,7 +248,7 @@ struct HouseListView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 列表（右滑卡片露出 已租/删除 按钮）
+    // MARK: - 列表（右滑卡片露出 编辑/已租/删除 按钮；点卡片进详情）
 
     private var houseList: some View {
         Group {
@@ -252,16 +268,19 @@ struct HouseListView: View {
                 ScrollView {
                     LazyVStack(spacing: 10) {
                         ForEach(filteredHouses) { house in
-                            NavigationLink {
-                                HouseDetailView(house: house)
-                            } label: {
-                                SwipeableHouseCard(
-                                    house: house,
-                                    onToggleStatus: { toggleStatus(house) },
-                                    onDelete: { houseToDelete = house }
-                                )
-                            }
-                            .buttonStyle(.plain)
+                            SwipeableHouseCard(
+                                house: house,
+                                onTap: {
+                                    detailHouse = house
+                                    showDetail = true
+                                },
+                                onEdit: {
+                                    editHouse = house
+                                    showEdit = true
+                                },
+                                onToggleStatus: { toggleStatus(house) },
+                                onDelete: { houseToDelete = house }
+                            )
                         }
                     }
                     .padding(.horizontal, 16)
