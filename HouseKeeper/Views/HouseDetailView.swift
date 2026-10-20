@@ -35,7 +35,7 @@ struct HouseDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button(\u{22}编辑\u{22}) { showEdit = true }
+                Button("编辑") { showEdit = true }
             }
         }
         .sheet(isPresented: $showEdit) {
@@ -45,21 +45,21 @@ struct HouseDetailView: View {
             ShareSheet(items: shareItems)
                 .presentationDetents([.medium, .large])
         }
-        .confirmationDialog(\u{22}切换房源状态\u{22}, isPresented: $showStatusConfirm, titleVisibility: .visible) {
+        .confirmationDialog("切换房源状态", isPresented: $showStatusConfirm, titleVisibility: .visible) {
             if house.status == .available {
-                Button(\u{22}标记为已租\u{22}, role: .destructive) { setStatus(.rented) }
+                Button("标记为已租", role: .destructive) { setStatus(.rented) }
             } else {
-                Button(\u{22}标记为待租\u{22}) { setStatus(.available) }
+                Button("标记为待租") { setStatus(.available) }
             }
-            Button(\u{22}取消\u{22}, role: .cancel) {}
+            Button("取消", role: .cancel) {}
         } message: {
-            Text(house.status == .available ? \u{22}确认这套已租出？\u{22} : \u{22}确认这套恢复可带看？\u{22})
+            Text(house.status == .available ? "确认这套已租出？" : "确认这套恢复可带看？")
         }
-        .confirmationDialog(\u{22}删除这套房源？\u{22}, isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-            Button(\u{22}删除房源\u{22}, role: .destructive) { deleteHouse() }
-            Button(\u{22}取消\u{22}, role: .cancel) {}
+        .confirmationDialog("删除这套房源？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("删除房源", role: .destructive) { deleteHouse() }
+            Button("取消", role: .cancel) {}
         } message: {
-            Text(\u{22}将同时删除该房源的照片和视频，且无法恢复。\u{22})
+            Text("将同时删除该房源的照片和视频，且无法恢复。")
         }
         .fullScreenCover(item: $previewRoute) { route in
             PhotoPreviewView(photos: house.photos, startIndex: route.index, roomKey: house.mediaRoomKey)
@@ -71,7 +71,7 @@ struct HouseDetailView: View {
                     VStack(spacing: 12) {
                         ProgressView()
                             .tint(.white)
-                        Text(\u{22}正在生成分享卡片，上传照片和视频…\u{22})
+                        Text("正在生成分享卡片，上传照片和视频…")
                             .font(.footnote)
                             .foregroundColor(.white)
                     }
@@ -81,13 +81,13 @@ struct HouseDetailView: View {
                 }
             }
         }
-        .alert(\u{22}无法分享\u{22}, isPresented: Binding(
+        .alert("无法分享", isPresented: Binding(
             get: { shareError != nil },
             set: { if !$0 { shareError = nil } }
         )) {
-            Button(\u{22}好\u{22}, role: .cancel) {}
+            Button("好", role: .cancel) {}
         } message: {
-            Text(shareError ?? \u{22}\u{22})
+            Text(shareError ?? "")
         }
     }
 
@@ -97,10 +97,10 @@ struct HouseDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Label {
-                    Text(\u{22}实拍照片与视频\u{22})
+                    Text("实拍照片与视频")
                         .font(.headline)
                 } icon: {
-                    Image(systemName: \u{22}camera.fill\u{22})
+                    Image(systemName: "camera.fill")
                         .foregroundColor(AppTheme.primary)
                 }
                 Spacer()
@@ -110,7 +110,7 @@ struct HouseDetailView: View {
                         Button {
                             exitSelecting()
                         } label: {
-                            Label(\u{22}取消\u{22}, systemImage: \u{22}xmark\u{22})
+                            Label("取消", systemImage: "xmark")
                                 .font(.subheadline.weight(.medium))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 5)
@@ -124,7 +124,7 @@ struct HouseDetailView: View {
                         Button {
                             isSelecting = true
                         } label: {
-                            Label(\u{22}多选\u{22}, systemImage: \u{22}checkmark.circle\u{22})
+                            Label("多选", systemImage: "checkmark.circle")
                                 .font(.subheadline.weight(.medium))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 5)
@@ -139,9 +139,9 @@ struct HouseDetailView: View {
 
             if house.photos.isEmpty && house.videos.isEmpty {
                 HStack(spacing: 8) {
-                    Image(systemName: \u{22}photo.on.rectangle.angled\u{22})
+                    Image(systemName: "photo.on.rectangle.angled")
                         .foregroundColor(.secondary)
-                    Text(\u{22}暂无照片和视频，点「编辑」添加\u{22})
+                    Text("暂无照片和视频，点「编辑」添加")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -164,7 +164,7 @@ struct HouseDetailView: View {
                                 .contentShape(RoundedRectangle(cornerRadius: 8))
                                 .overlay(alignment: .topLeading) {
                                     if isSelecting {
-                                        Image(systemName: selectedMediaNames.contains(media.fileName) ? \u{22}checkmark.circle.fill\u{22} : \u{22}circle\u{22})
+                                        Image(systemName: selectedMediaNames.contains(media.fileName) ? "checkmark.circle.fill" : "circle")
                                             .font(.system(size: 20))
                                             .foregroundColor(.white)
                                             .shadow(radius: 2)
@@ -194,7 +194,7 @@ struct HouseDetailView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                                 .contentShape(RoundedRectangle(cornerRadius: 12))
                                 .overlay(alignment: .topLeading) {
-                                    Image(systemName: selectedMediaNames.contains(media.fileName) ? \u{22}checkmark.circle.fill\u{22} : \u{22}circle\u{22})
+                                    Image(systemName: selectedMediaNames.contains(media.fileName) ? "checkmark.circle.fill" : "circle")
                                         .font(.system(size: 20))
                                         .foregroundColor(.white)
                                         .shadow(radius: 2)
@@ -217,7 +217,7 @@ struct HouseDetailView: View {
                     Button {
                         saveSelectedToAlbum()
                     } label: {
-                        Label(selectedMediaNames.isEmpty ? \u{22}请选择要保存的照片或视频\u{22} : \u{22}保存到相册（\(selectedMediaNames.count)）\u{22}, systemImage: \u{22}square.and.arrow.down\u{22})
+                        Label(selectedMediaNames.isEmpty ? "请选择要保存的照片或视频" : "保存到相册（\(selectedMediaNames.count)）", systemImage: "square.and.arrow.down")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
                     }
@@ -230,13 +230,13 @@ struct HouseDetailView: View {
         .padding(14)
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 14))
-        .alert(\u{22}保存到相册\u{22}, isPresented: Binding(
+        .alert("保存到相册", isPresented: Binding(
             get: { saveTip != nil },
             set: { if !$0 { saveTip = nil } }
         )) {
-            Button(\u{22}好\u{22}, role: .cancel) {}
+            Button("好", role: .cancel) {}
         } message: {
-            Text(saveTip ?? \u{22}\u{22})
+            Text(saveTip ?? "")
         }
     }
 
@@ -265,10 +265,10 @@ struct HouseDetailView: View {
                 PHPhotoLibrary.shared().performChanges {
                     for media in selected {
                         let url = MediaStore.url(for: media.fileName, roomKey: house.mediaRoomKey)
-                        if media.kind == \u{22}image\u{22},
+                        if media.kind == "image",
                            let image = UIImage(contentsOfFile: url.path) {
                             PHAssetChangeRequest.creationRequestForAsset(from: image)
-                        } else if media.kind == \u{22}video\u{22},
+                        } else if media.kind == "video",
                                   FileManager.default.fileExists(atPath: url.path) {
                             PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
                         }
@@ -276,16 +276,16 @@ struct HouseDetailView: View {
                 } completionHandler: { success, error in
                     DispatchQueue.main.async {
                         if success {
-                            saveTip = \u{22}已保存 \(selected.count) 个到相册\u{22}
+                            saveTip = "已保存 \(selected.count) 个到相册"
                             exitSelecting()
                         } else {
-                            saveTip = \u{22}保存失败：\(error?.localizedDescription ?? \u{22}未知错误\u{22})\u{22}
+                            saveTip = "保存失败：\(error?.localizedDescription ?? "未知错误")"
                         }
                     }
                 }
             default:
                 DispatchQueue.main.async {
-                    saveTip = \u{22}没有相册写入权限，请在 设置 → 隐私与安全 → 照片 中允许\u{22}
+                    saveTip = "没有相册写入权限，请在 设置 → 隐私与安全 → 照片 中允许"
                 }
             }
         }
@@ -300,7 +300,7 @@ struct HouseDetailView: View {
                     Text(house.displayRoomNo)
                         .font(.title2.weight(.bold))
                         .foregroundColor(AppTheme.primary)
-                    Text(\u{22}\(house.towerLabel) · \(house.layout.isEmpty ? \u{22}户型未填\u{22} : house.layout)\u{22})
+                    Text("\(house.towerLabel) · \(house.layout.isEmpty ? "户型未填" : house.layout)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -311,10 +311,10 @@ struct HouseDetailView: View {
 
             Divider()
 
-            infoRow(icon: \u{22}person.fill\u{22}, title: \u{22}房东\u{22}, value: house.landlord.isEmpty ? \u{22}—\u{22} : house.landlord)
-            infoRow(icon: \u{22}yensign\u{22}, title: \u{22}价格\u{22}, value: house.priceText)
-            infoRow(icon: \u{22}key.fill\u{22}, title: \u{22}密码\u{22}, value: house.password.isEmpty ? \u{22}—\u{22} : house.password)
-            infoRow(icon: \u{22}text.alignleft\u{22}, title: \u{22}备注\u{22}, value: house.remark.isEmpty ? \u{22}—\u{22} : house.remark)
+            infoRow(icon: "person.fill", title: "房东", value: house.landlord.isEmpty ? "—" : house.landlord)
+            infoRow(icon: "yensign", title: "价格", value: house.priceText)
+            infoRow(icon: "key.fill", title: "密码", value: house.password.isEmpty ? "—" : house.password)
+            infoRow(icon: "text.alignleft", title: "备注", value: house.remark.isEmpty ? "—" : house.remark)
         }
         .padding(14)
         .background(Color.white)
@@ -346,9 +346,9 @@ struct HouseDetailView: View {
                 showStatusConfirm = true
             } label: {
                 Label {
-                    Text(house.status == .available ? \u{22}标记为已租\u{22} : \u{22}标记为待租\u{22})
+                    Text(house.status == .available ? "标记为已租" : "标记为待租")
                 } icon: {
-                    Image(systemName: house.status == .available ? \u{22}checkmark.circle\u{22} : \u{22}arrow.uturn.backward.circle\u{22})
+                    Image(systemName: house.status == .available ? "checkmark.circle" : "arrow.uturn.backward.circle")
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
@@ -359,7 +359,7 @@ struct HouseDetailView: View {
             Button {
                 shareHouseCard()
             } label: {
-                Label(\u{22}分享\u{22}, systemImage: \u{22}square.and.arrow.up\u{22})
+                Label("分享", systemImage: "square.and.arrow.up")
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
             }
@@ -368,7 +368,7 @@ struct HouseDetailView: View {
             Button(role: .destructive) {
                 showDeleteConfirm = true
             } label: {
-                Label(\u{22}删除房源\u{22}, systemImage: \u{22}trash\u{22})
+                Label("删除房源", systemImage: "trash")
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
             }
@@ -397,7 +397,7 @@ struct HouseDetailView: View {
     /// 分享：生成 H5 卡片链接（上传照片视频到腾讯云 COS），系统分享面板发出链接
     private func shareHouseCard() {
         guard let config = CosConfig.load(), config.isValid else {
-            shareError = \u{22}请先在首页左上角「设置」里填写云存储配置（腾讯云 COS），再分享卡片链接\u{22}
+            shareError = "请先在首页左上角「设置」里填写云存储配置（腾讯云 COS），再分享卡片链接"
             return
         }
         isSharing = true
@@ -459,7 +459,7 @@ struct PhotoPreviewView: View {
                                 Button {
                                     saveImageToAlbum(image)
                                 } label: {
-                                    Label(\u{22}保存到相册\u{22}, systemImage: \u{22}square.and.arrow.down\u{22})
+                                    Label("保存到相册", systemImage: "square.and.arrow.down")
                                 }
                             }
                     }
@@ -470,20 +470,20 @@ struct PhotoPreviewView: View {
             Button {
                 dismiss()
             } label: {
-                Image(systemName: \u{22}xmark.circle.fill\u{22})
+                Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 30))
                     .foregroundColor(.white.opacity(0.85))
                     .padding(18)
             }
         }
         .statusBarHidden()
-        .alert(\u{22}保存到相册\u{22}, isPresented: Binding(
+        .alert("保存到相册", isPresented: Binding(
             get: { saveMessage != nil },
             set: { if !$0 { saveMessage = nil } }
         )) {
-            Button(\u{22}好\u{22}, role: .cancel) {}
+            Button("好", role: .cancel) {}
         } message: {
-            Text(saveMessage ?? \u{22}\u{22})
+            Text(saveMessage ?? "")
         }
     }
 
@@ -497,13 +497,13 @@ struct PhotoPreviewView: View {
                 } completionHandler: { success, error in
                     DispatchQueue.main.async {
                         saveMessage = success
-                            ? \u{22}已保存到相册\u{22}
-                            : \u{22}保存失败：\(error?.localizedDescription ?? \u{22}未知错误\u{22})\u{22}
+                            ? "已保存到相册"
+                            : "保存失败：\(error?.localizedDescription ?? "未知错误")"
                     }
                 }
             default:
                 DispatchQueue.main.async {
-                    saveMessage = \u{22}没有相册写入权限，请在 设置 → 隐私与安全 → 照片 中允许\u{22}
+                    saveMessage = "没有相册写入权限，请在 设置 → 隐私与安全 → 照片 中允许"
                 }
             }
         }
