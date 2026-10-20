@@ -271,8 +271,11 @@ enum CosUploader {
     }
 
     /// COS V5 签名：q-sign-algorithm=sha1;q-ak=...;q-sign-time=...;q-key-time=...;q-header-list=...;q-url-param-list=...;q-signature=...
-    /// 关键：签名串里的路径必须与请求 URL 的路径使用同一份百分号编码（中文房号目录会被编码），
-    /// header 的 key 小写、value 按 RFC3986 编码、按字典序拼接，否则 COS 校验不一致返回 403
+    /// 关键（严格按 COS 官方规范）：
+    /// 1. HttpString = HttpMethod\nUriPathname\nHttpParameters\nHttpHeaders\n —— 恰好 3 个换行分隔 4 段，末尾再一个换行；多一个换行会令 COS 校验不一致（SignatureDoesNotMatch）
+    /// 2. UriPathname 使用与请求 URL 相同的百分号编码（中文房号目录会被编码）
+    /// 3. HttpHeaders 的 key 小写、value 按 RFC3986 编码、按字典序拼接
+    /// 4. q-header-list 用分号分隔参与签名的 header key
     private static func presignedURL(for path: String, method: String, expires: Int, headers: [(String, String)], config: CosConfig) throws -> URL {
         let now = Int(Date().timeIntervalSince1970)
         let signTime = "\(now);\(now + expires)"
@@ -291,7 +294,8 @@ enum CosUploader {
         let headerValue = pairs.map { "\($0.key)=\($0.value)" }.joined(separator: "&")
 
         let signKey = HMAC_SHA1(key: config.secretKey, message: keyTime)
-        let httpString = "\(method.lowercased())\n\(encodedPath)\n\n\n\(headerValue)\n"
+        // HttpString 段结构：method\npath\n参数\n请求头\n（参数为空时是两个连续换行）
+        let httpString = "\(method.lowercased())\n\(encodedPath)\n\n\(headerValue)\n"
         let sha1Http = SHA1(hexString: httpString)
         let stringToSign = "sha1\n\(signTime)\n\(sha1Http)\n"
         let signature = HMAC_SHA1(key: signKey, message: stringToSign)
