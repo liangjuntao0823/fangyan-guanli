@@ -204,10 +204,8 @@ struct HouseDetailView: View {
                                     toggleSelect(media)
                                 }
                         } else {
-                            // 视频条目：缩略图 + 播放三角，点击全屏播放
+                            // 视频条目：按视频原始比例完整显示首帧 + 大播放三角，一眼可辨是视频
                             HouseDetailVideoItem(media: media, roomKey: house.mediaRoomKey)
-                                .frame(height: 200)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                     }
                 }
@@ -395,15 +393,34 @@ struct HouseDetailView: View {
     }
 
     /// 分享：生成 H5 卡片链接（上传照片视频到腾讯云 COS），系统分享面板发出链接
+    /// 注意：Task 内只传值类型（fileName/kind 数组 + 字符串字段），绝不直接访问 SwiftData 模型，
+    /// 否则跨线程读取 @Model 会闪退（v1.11 修复的分享闪退根因）
     private func shareHouseCard() {
         guard let config = CosConfig.load(), config.isValid else {
             shareError = "请先在首页左上角「设置」里填写云存储配置（腾讯云 COS），再分享卡片链接"
             return
         }
+        // 先在主线程把所有需要的数据拷成值类型
+        let files = house.mediaItems.map { ShareMediaFile(name: $0.fileName, kind: $0.kind) }
+        let roomKey = house.mediaRoomKey
+        let info = ShareHouseInfo(
+            displayRoomNo: house.displayRoomNo,
+            towerLabel: house.towerLabel,
+            layout: house.layout,
+            statusLabel: house.status.label,
+            priceText: house.priceText,
+            landlord: house.landlord,
+            password: house.password,
+            remark: house.remark
+        )
+        guard !files.isEmpty else {
+            shareError = "这套房源还没有照片或视频，先编辑添加素材再分享"
+            return
+        }
         isSharing = true
         Task {
             do {
-                let url = try await CosUploader.shareCard(for: house, config: config)
+                let url = try await CosUploader.shareCard(mediaFiles: files, roomKey: roomKey, info: info, config: config)
                 await MainActor.run {
                     isSharing = false
                     shareItems = [url]

@@ -65,6 +65,24 @@ struct CosConfig {
     }
 }
 
+// MARK: - 分享数据（值类型，避免跨线程访问 SwiftData 模型导致闪退）
+
+struct ShareMediaFile {
+    let name: String
+    let kind: String
+}
+
+struct ShareHouseInfo {
+    let displayRoomNo: String
+    let towerLabel: String
+    let layout: String
+    let statusLabel: String
+    let priceText: String
+    let landlord: String
+    let password: String
+    let remark: String
+}
+
 // MARK: - 腾讯云 COS V5 预签名上传（HMAC-SHA1，零第三方依赖）
 
 enum CosUploader {
@@ -92,22 +110,20 @@ enum CosUploader {
         }
     }
 
-    /// 为房源生成 H5 分享卡片：上传所有媒体 → 生成 index.html → 上传 → 返回长期有效的链接（URL 对象，系统分享面板可直接作为链接分享）
-    static func shareCard(for house: House, config: CosConfig) async throws -> URL {
-        let media = house.mediaItems
-        guard !media.isEmpty else { throw CosError.missingMedia }
-
-        let roomKey = house.mediaRoomKey  // 房号目录名（安全文件名）
+    /// 为房源生成 H5 分享卡片：上传所有媒体 → 生成 index.html → 上传 → 返回长期有效的链接
+    /// 入参全部为值类型（mediaFiles / info），不在后台线程触碰 SwiftData 模型，避免闪退
+    static func shareCard(mediaFiles: [ShareMediaFile], roomKey: String, info: ShareHouseInfo, config: CosConfig) async throws -> URL {
+        guard !mediaFiles.isEmpty else { throw CosError.missingMedia }
 
         // 1. 逐个上传媒体
         var mediaTags: [String] = []
-        for item in media {
-            let url = MediaStore.url(for: item.fileName, roomKey: roomKey)
+        for file in mediaFiles {
+            let url = MediaStore.url(for: file.name, roomKey: roomKey)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             let data = try Data(contentsOf: url)
-            let remotePath = "h/\(roomKey)/\(item.fileName)"
-            try await upload(data: data, to: remotePath, contentType: mimeType(for: item.kind), config: config)
-            if item.kind == "video" {
+            let remotePath = "h/\(roomKey)/\(file.name)"
+            try await upload(data: data, to: remotePath, contentType: mimeType(for: file.kind), config: config)
+            if file.kind == "video" {
                 mediaTags.append("<video class=\"v\" controls playsinline preload=\"metadata\" poster=\"\(remotePath)\" src=\"\(remotePath)\"></video>")
             } else {
                 mediaTags.append("<img class=\"p\" src=\"\(remotePath)\">")
@@ -116,8 +132,8 @@ enum CosUploader {
         guard !mediaTags.isEmpty else { throw CosError.missingMedia }
 
         // 2. 生成 index.html（带 og 标签，微信抓取卡片）
-        let title = "\(house.displayRoomNo) · \(house.layout.isEmpty ? "房源" : house.layout)"
-        let desc = "\(house.priceText) · \(house.landlord.isEmpty ? "房东信息见页内" : house.landlord)"
+        let title = "\(info.displayRoomNo) · \(info.layout.isEmpty ? "房源" : info.layout)"
+        let desc = "\(info.priceText) · \(info.landlord.isEmpty ? "房东信息见页内" : info.landlord)"
         // 封面用第一张图（og:image 用与页面相同的长期有效 URL，微信能持续抓取到封面）
         let cover = mediaTags.first { $0.contains("img") } ?? ""
         let coverSrc = cover.isEmpty ? "" : extractSrc(from: cover)
@@ -125,14 +141,14 @@ enum CosUploader {
         let html = buildHTML(
             title: title,
             desc: desc,
-            roomNo: house.displayRoomNo,
-            towerLabel: house.towerLabel,
-            layout: house.layout,
-            statusLabel: house.status.label,
-            priceText: house.priceText,
-            landlord: house.landlord,
-            password: house.password,
-            remark: house.remark,
+            roomNo: info.displayRoomNo,
+            towerLabel: info.towerLabel,
+            layout: info.layout,
+            statusLabel: info.statusLabel,
+            priceText: info.priceText,
+            landlord: info.landlord,
+            password: info.password,
+            remark: info.remark,
             mediaTags: mediaTags,
             coverSrc: coverSrc
         )
@@ -249,6 +265,7 @@ enum CosUploader {
     }
 
     /// COS V5 签名：q-sign-algorithm=sha1;q-ak=...;q-sign-time=...;q-key-time=...;q-header-list=...;q-url-param-list=...;q-signature=...
+    /// 签名基于未编码 path 计算；URL 中的 path 做百分号编码（中文/特殊字符房号目录也能正常请求，不会生成非法 URL）
     private static func presignedURL(for path: String, method: String, expires: Int, config: CosConfig) throws -> URL {
         let now = Int(Date().timeIntervalSince1970)
         let signTime = "\(now);\(now + expires)"
@@ -268,7 +285,7 @@ enum CosUploader {
         var comps = URLComponents()
         comps.scheme = "https"
         comps.host = hostValue
-        comps.percentEncodedPath = pathWithSlash
+        comps.percentEncodedPath = pathWithSlash.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? pathWithSlash
         comps.percentEncodedQuery = "q-sign-algorithm=sha1&q-ak=\(config.secretId)&q-sign-time=\(signTime)&q-key-time=\(keyTime)&q-header-list=\(headerList)&q-url-param-list=&q-signature=\(signature)"
         guard let url = comps.url else { throw CosError.invalidConfig }
         return url
