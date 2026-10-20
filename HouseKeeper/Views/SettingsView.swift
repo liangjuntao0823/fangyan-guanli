@@ -82,7 +82,7 @@ struct SettingsView: View {
             }
 
             // v1.21：分享名片信息（H5 页面名片区块 + 微信卡片描述）
-            Section("分享名片信息") {
+            Section(header: Text("分享名片信息"), footer: Text("姓名和电话会显示在分享 H5 页面的名片区、微信卡片的描述和「拨打电话/复制电话」按钮上。修改后再次分享会按新名片重新生成链接。")) {
                 TextField("姓名（默认：梁涛）", text: $shareName)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -95,8 +95,6 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(shareName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            } footer: {
-                Text("姓名和电话会显示在分享 H5 页面的名片区、微信卡片的描述和「拨打电话/复制电话」按钮上。修改后再次分享会按新名片重新生成链接。")
             }
 
             Section("开通步骤（简述）") {
