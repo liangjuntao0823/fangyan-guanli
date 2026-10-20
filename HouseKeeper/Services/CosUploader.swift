@@ -122,11 +122,6 @@ enum CosUploader {
         let title = "\(info.displayRoomNo) · \(info.layout.isEmpty ? "房源" : info.layout)"
         let desc = "\(info.priceText) · \(info.landlord.isEmpty ? "房东信息见页内" : info.landlord)"
         let htmlPath = "h/\(roomKey)/index.html"
-        try await upload(data: Data(), to: htmlPath, contentType: "text/html; charset=utf-8", config: config)
-        // 上传 index.html 后生成分享链接（10 年有效）
-        let shareURL = try presignedGetURL(for: htmlPath, expires: shareLinkExpires, config: config)
-        let shareLink = shareURL.absoluteString
-
         let html = buildHTML(
             title: title,
             desc: desc,
@@ -140,10 +135,30 @@ enum CosUploader {
             remark: info.remark,
             mediaTags: mediaTags,
             coverSrc: imageAbsURLs.first ?? "",
-            shareLink: shareLink
+            shareLink: ""
         )
         let htmlData = Data(html.utf8)
         try await upload(data: htmlData, to: htmlPath, contentType: "text/html; charset=utf-8", config: config)
+        // 上传 index.html 后生成分享链接（10 年有效）
+        let shareURL = try presignedGetURL(for: htmlPath, expires: shareLinkExpires, config: config)
+
+        // 3. og:url 需要指向最终分享链接：重新生成一次 HTML（仅 og:url 不同）后覆盖上传
+        let htmlFinal = buildHTML(
+            title: title,
+            desc: desc,
+            roomNo: info.displayRoomNo,
+            towerLabel: info.towerLabel,
+            layout: info.layout,
+            statusLabel: info.statusLabel,
+            priceText: info.priceText,
+            landlord: info.landlord,
+            password: info.password,
+            remark: info.remark,
+            mediaTags: mediaTags,
+            coverSrc: imageAbsURLs.first ?? "",
+            shareLink: shareURL.absoluteString
+        )
+        try await upload(data: Data(htmlFinal.utf8), to: htmlPath, contentType: "text/html; charset=utf-8", config: config)
 
         return shareURL
     }
@@ -169,7 +184,7 @@ enum CosUploader {
         let grid = "<div class=\"grid\">" + mediaTags.joined(separator: "") + "</div>"
         // og:image / og:url 必须用绝对 URL，微信服务端才能抓取到封面并渲染成卡片
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
-        let urlMeta = "<meta property=\"og:url\" content=\"\(shareLink)\">"
+        let urlMeta = shareLink.isEmpty ? "" : "<meta property=\"og:url\" content=\"\(shareLink)\">"
         return """
         <!DOCTYPE html>
         <html lang="zh-CN">
