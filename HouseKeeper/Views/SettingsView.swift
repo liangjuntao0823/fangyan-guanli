@@ -48,13 +48,15 @@ struct SettingsView: View {
                 Text("平时无需操作：App 更新页面设计后，旧缓存会自动失效、分享自动生成新页面。仅当您想立刻重置全部缓存（例如改了页面样式想马上生效）时才需要点这里。")
             }
 
-            Section("开通步骤（简述）") {
-                Text("1. 打开 cloud.tencent.com 注册并实名认证；2. 开通「对象存储 COS」；3. 创建存储桶：名称建议 fangyuan88、地域选香港、访问权限选「私有读写」；4. 在「访问管理 CAM → API 密钥管理」新建密钥，得到 SecretId 和 SecretKey；5. 在「存储桶 → 域名与传输管理 → 自定义源站域名」绑定自己的域名（需先在腾讯云购买域名），并把域名填入远程配置的「自定义域名」栏——微信只认自定义域名，才能把链接抓成网页卡片。")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                Text("密钥与名片只存在本机钥匙串，不会上传到任何地方。")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
+            // v1.28：版本号移到设置页最底部（原首页左上角版本徽章已移除）
+            Section {
+                HStack {
+                    Spacer()
+                    Text("房源管家 v\(appVersion)")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
             }
         }
         .navigationTitle("设置")
@@ -67,6 +69,11 @@ struct SettingsView: View {
         } message: {
             Text(refreshedTip ?? "")
         }
+    }
+
+    /// 当前 App 版本号（读自工程配置，如 1.28）
+    private var appVersion: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
     }
 }
 
@@ -140,6 +147,16 @@ struct CosConfigView: View {
                 .disabled(bucket.isEmpty || region.isEmpty || secretId.isEmpty || secretKey.isEmpty || isVerifying)
             } footer: {
                 Text("点击后 App 会用当前配置向云存储上传一个测试文件并回读，成功才提示「配置正确」；失败会直接告诉您具体原因。")
+            }
+
+            // v1.28：开通步骤从设置主页面移入本页（仅首次配置需要）
+            Section("开通步骤（简述）") {
+                Text("1. 打开 cloud.tencent.com 注册并实名认证；2. 开通「对象存储 COS」；3. 创建存储桶：名称建议 fangyuan88、地域选香港、访问权限选「私有读写」；4. 在「访问管理 CAM → API 密钥管理」新建密钥，得到 SecretId 和 SecretKey；5. 在「存储桶 → 域名与传输管理 → 自定义源站域名」绑定自己的域名（需先在腾讯云购买域名），并把域名填入远程配置的「自定义域名」栏——微信只认自定义域名，才能把链接抓成网页卡片。")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                Text("密钥与名片只存在本机钥匙串，不会上传到任何地方。")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
             }
         }
         .navigationTitle("远程配置")

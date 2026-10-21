@@ -23,11 +23,6 @@ struct HouseListView: View {
     @State private var generateTip = ""
     @State private var shareError: String?
 
-    /// 当前 App 版本号（读自工程配置，如 1.21）
-    private var appVersion: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
-    }
-
     /// 筛选后的房源：默认待租，并按「座号 + 楼层 + 房号」升序排列（1座在前，同座先按楼层、再按房号从小到大）
     private var filteredHouses: [House] {
         houses
@@ -90,7 +85,7 @@ struct HouseListView: View {
                         Button("取消") { exitMultiSelect() }
                     } else {
                         HStack(spacing: 14) {
-                            // v1.22：多选分享入口
+                            // v1.21：多选分享入口
                             Button {
                                 isSelecting = true
                             } label: {
@@ -164,16 +159,7 @@ struct HouseListView: View {
 
     private var statsBar: some View {
         HStack(spacing: 12) {
-            // 左上角：版本号徽章
-            if !appVersion.isEmpty {
-                Text("v" + appVersion)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundColor(AppTheme.primary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(AppTheme.primary.opacity(0.10))
-                    .clipShape(Capsule())
-            }
+            // v1.28：版本号徽章已移除，改到「设置」页最底部显示
 
             Label {
                 Text("房源统计")
@@ -361,7 +347,7 @@ struct HouseListView: View {
                 }
             }
         }
-        // v1.22：多选模式底部操作栏
+        // v1.21：多选模式底部操作栏
         .safeAreaInset(edge: .bottom) {
             if isSelecting {
                 HStack(spacing: 12) {
@@ -391,7 +377,7 @@ struct HouseListView: View {
         }
     }
 
-    // MARK: - v1.22 多选分享
+    // MARK: - v1.21 多选分享
 
     private func toggleHouseSelect(_ house: House) {
         if selectedHouseIDs.contains(house.id) {
