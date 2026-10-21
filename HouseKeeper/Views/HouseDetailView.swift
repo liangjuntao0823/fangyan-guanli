@@ -115,19 +115,33 @@ struct HouseDetailView: View {
                 Spacer()
                 if house.hasPhoto || house.hasVideo {
                     if isSelecting {
-                        // 多选模式：取消按钮（与「多选」按钮同款品牌色胶囊）
-                        Button {
-                            exitSelecting()
-                        } label: {
-                            Label("取消", systemImage: "xmark")
-                                .font(.subheadline.weight(.medium))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 5)
-                                .background(AppTheme.primary)
-                                .foregroundColor(.white)
-                                .clipShape(Capsule())
+                        // 多选模式：全选（已全选时点击清空）+ 取消按钮（同款品牌色胶囊）
+                        HStack(spacing: 8) {
+                            Button {
+                                toggleSelectAll()
+                            } label: {
+                                Label(selectedMediaNames.count == house.mediaItems.count ? "取消全选" : "全选", systemImage: "checkmark.circle")
+                                    .font(.subheadline.weight(.medium))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 5)
+                                    .background(AppTheme.primary)
+                                    .foregroundColor(.white)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            Button {
+                                exitSelecting()
+                            } label: {
+                                Label("取消", systemImage: "xmark")
+                                    .font(.subheadline.weight(.medium))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 5)
+                                    .background(AppTheme.primary)
+                                    .foregroundColor(.white)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     } else {
                         // 多选入口（胶囊形，大小随文字自适应）
                         Button {
@@ -250,6 +264,16 @@ struct HouseDetailView: View {
     }
 
     // MARK: - 多选 / 保存到相册
+
+    /// v1.30：多选模式一键全选 / 取消全选（已全选时再点则清空）
+    private func toggleSelectAll() {
+        let all = Set(house.mediaItems.map { $0.fileName })
+        if !all.isEmpty, selectedMediaNames.count == all.count {
+            selectedMediaNames.removeAll()
+        } else {
+            selectedMediaNames = all
+        }
+    }
 
     private func toggleSelect(_ media: MediaItem) {
         if selectedMediaNames.contains(media.fileName) {
