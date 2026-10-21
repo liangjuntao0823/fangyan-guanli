@@ -48,6 +48,26 @@ struct SettingsView: View {
                 Text("平时无需操作：App 更新页面设计后，旧缓存会自动失效、分享自动生成新页面。仅当您想立刻重置全部缓存（例如改了页面样式想马上生效）时才需要点这里。")
             }
 
+            // v1.29：数据备份——微信式文件夹备份：全部数据集中在 Documents（housekeeper.store + Media/），
+            // 备份 = 在「文件」App 把整个「房源管家」文件夹复制走；恢复 = 重装后把文件夹内容放回原位
+            Section {
+                HStack {
+                    Label("数据文件夹大小", systemImage: "externaldrive")
+                    Spacer()
+                    Text(Self.documentsSizeText())
+                        .foregroundColor(.secondary)
+                }
+                Button {
+                    if let url = URL(string: "shareddocuments://") {
+                        UIApplication.shared.open(url)
+                    }
+                } label: {
+                    Label("打开「文件」App 查看数据文件夹", systemImage: "folder")
+                }
+            } footer: {
+                Text("备份：在「文件」App → 我的 iPhone → 房源管家，把整个文件夹（含 housekeeper.store 与 Media）复制到电脑/网盘/微信。恢复：重装 App 后把文件夹内容放回原位，房源信息和图片视频全部还原。")
+            }
+
             // v1.28：版本号移到设置页最底部（原首页左上角版本徽章已移除）
             Section {
                 HStack {
@@ -71,9 +91,23 @@ struct SettingsView: View {
         }
     }
 
-    /// 当前 App 版本号（读自工程配置，如 1.28）
+    /// 当前 App 版本号（读自工程配置，如 1.29）
     private var appVersion: String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
+    }
+
+    /// v1.29：Documents 目录总大小（含 Media/、数据库、二维码、分享缓存等）
+    private static func documentsSizeText() -> String {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        var total: Int64 = 0
+        if let enumerator = FileManager.default.enumerator(at: docs, includingPropertiesForKeys: [.fileSizeKey]) {
+            for case let url as URL in enumerator {
+                if let values = try? url.resourceValues(forKeys: [.fileSizeKey]), let size = values.fileSize {
+                    total += Int64(size)
+                }
+            }
+        }
+        return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
     }
 }
 

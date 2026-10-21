@@ -24,6 +24,8 @@ struct HouseListView: View {
     @State private var shareError: String?
 
     /// 筛选后的房源：默认待租，并按「座号 + 楼层 + 房号」升序排列（1座在前，同座先按楼层、再按房号从小到大）
+    /// v1.29（优化评估）：搜索/筛选在内存中进行。房源规模通常为个位数~几十套，
+    /// 全量 @Query + 内存过滤即最优解；若未来房源破百再考虑把过滤下推到 SQLite（动态 @Query predicate）。
     private var filteredHouses: [House] {
         houses
             .filter { house in

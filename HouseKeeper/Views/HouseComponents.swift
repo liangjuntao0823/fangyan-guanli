@@ -37,11 +37,10 @@ struct StatusBadge: View {
     }
 }
 
-// MARK: - 视频首帧缩略图（异步提取第一帧，避免灰色占位；fit=true 时完整显示不裁切，竖版视频保持竖版比例，一眼可辨是视频）
+// MARK: - 视频首帧缩略图（异步提取第一帧，避免灰色占位）
 
 struct VideoThumbnailView: View {
     let url: URL
-    var fit: Bool = false
     @State private var thumbnail: UIImage?
 
     var body: some View {
@@ -49,8 +48,7 @@ struct VideoThumbnailView: View {
             if let thumbnail {
                 Image(uiImage: thumbnail)
                     .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaledToFill()
             } else {
                 ZStack {
                     Color.gray.opacity(0.2)
@@ -66,7 +64,7 @@ struct VideoThumbnailView: View {
         let asset = AVAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 1280, height: 1280)
+        generator.maximumSize = CGSize(width: 640, height: 640)
         let time = CMTime(seconds: 0.1, preferredTimescale: 600)
         generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, _, _ in
             guard let cgImage else { return }
@@ -77,17 +75,16 @@ struct VideoThumbnailView: View {
     }
 }
 
-// MARK: - 媒体缩略图（videoFit=true 用于详情页视频条目：竖版视频完整显示，不再裁成横图被误认成图片）
+// MARK: - 媒体缩略图
 
 struct MediaThumbView: View {
     let media: MediaItem
     let roomKey: String
-    var videoFit: Bool = false
 
     var body: some View {
         if media.kind == "video" {
             ZStack {
-                VideoThumbnailView(url: MediaStore.url(for: media.fileName, roomKey: roomKey), fit: videoFit)
+                VideoThumbnailView(url: MediaStore.url(for: media.fileName, roomKey: roomKey))
                 // 播放三角：缩小 + 半透明，不遮挡画面
                 Image(systemName: "play.fill")
                     .font(.system(size: 20))
@@ -238,7 +235,7 @@ struct HouseCardView: View {
     }
 }
 
-// MARK: - 详情页视频条目（缩略图 + 播放三角，点击全屏播放；videoFit 保持竖版比例完整显示首帧，避免被误认成图片）
+// MARK: - 详情页视频条目（缩略图 + 播放三角，点击全屏播放，播放界面长按可保存视频到相册）
 
 struct HouseDetailVideoItem: View {
     let media: MediaItem
@@ -249,10 +246,7 @@ struct HouseDetailVideoItem: View {
         Button {
             playing = true
         } label: {
-            ZStack {
-                Color.black.opacity(0.06)
-                MediaThumbView(media: media, roomKey: roomKey, videoFit: true)
-            }
+            MediaThumbView(media: media, roomKey: roomKey)
         }
         .buttonStyle(.plain)
         .fullScreenCover(isPresented: $playing) {
@@ -348,31 +342,15 @@ struct FullScreenVideoPlayer: View {
 
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
-    var onComplete: (() -> Void)? = nil
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        // 空内容保护：UIActivityViewController 不接受空 activityItems，否则直接崩溃
-        let safeItems = items.isEmpty ? [""] : items
-        let controller = UIActivityViewController(activityItems: safeItems, applicationActivities: nil)
-        // 分享完成（发送 / 取消）回调：图片分享完后自动衔接视频分享
-        controller.completionWithItemsHandler = { _, _, _, _ in
-            onComplete?()
-        }
-        // iPad 上必须指定 popover 锚点，否则系统直接崩溃；iPhone 自动跳过
-        if UIDevice.current.userInterfaceIdiom == .pad,
-           let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let root = scene.windows.first?.rootViewController {
-            controller.popoverPresentationController?.sourceView = root.view
-            controller.popoverPresentationController?.sourceRect = CGRect(x: root.view.bounds.midX, y: root.view.bounds.midY, width: 0, height: 0)
-            controller.popoverPresentationController?.permittedArrowDirections = []
-        }
-        return controller
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-// MARK: - 空状态（占满剩余空间并垂直居中，避免筛选无匹配时内容下沉）
+// MARK: - 空状态
 
 struct EmptyStateView: View {
     let icon: String
@@ -392,7 +370,7 @@ struct EmptyStateView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 24)
     }
 }
