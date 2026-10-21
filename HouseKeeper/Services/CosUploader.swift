@@ -101,6 +101,12 @@ enum CosUploader {
     /// 分享链接有效期：永久（10 年，COS 预签名 URL 上限内足够长，视为长期有效）
     static let shareLinkExpires: Int = 3650 * 86400
 
+    /// v1.25：HTML 模板版本号。每次修改 H5 页面模板（buildMaskedHTML / buildFullHTML / buildCollectionHTML /
+    /// mediaBlockHTML 等）后必须 +1——缓存校验会比对模板版本，版本变了旧缓存自动失效，
+    /// 下次分享自动重新生成并上传新页面，无需任何手动操作。
+    /// 这就解决了「改了网页设计但房源信息没变化、缓存命中还是旧链接」的问题。
+    static let htmlTemplateVersion = 1
+
     enum CosError: LocalizedError {
         case invalidConfig
         case missingMedia
@@ -140,6 +146,10 @@ enum CosUploader {
     ///   ⑤户型标题去重（户型已含「上/下」时不再重复拼接房号后缀）
     /// - v1.24：①视频彻底不自动播放（video 不带 src，封面+播放按钮，点击才注入播放，微信无法自动播）；
     ///   ②合集页标题改为「已为你挑选米兰X套优质房源」；③所有页面底栏改为「更多优质房源请与我联系-13288251132」
+    /// - v1.25：①视频封面改用独立首帧图（vthumb.jpg），video 无 src 无 poster——微信绝无自动播放可能；
+    ///   ②图片从背景图 div 改为 <img> 渲染（修复微信 WebView 缩略图空白），防长按保存；
+    ///   ③合集标题去掉「米兰」→「已为你挑选X套优质房源」；④多选分享加缓存（模板版本自动失效）；
+    ///   ⑤刷新缓存机制（自动模板版本 + 设置页手动按钮）；⑥合集/单套防保存图片视频
     /// 入参全部为值类型（ShareMediaFile / ShareHouseInfo），Task 内不触碰 SwiftData 模型，避免跨线程访问闪退
     static func shareCard(mediaFiles: [ShareMediaFile], roomKey: String, info: ShareHouseInfo, mode: ShareMode, config: CosConfig) async throws -> URL {
         guard !mediaFiles.isEmpty else { throw CosError.missingMedia }
@@ -148,12 +158,14 @@ enum CosUploader {
 
         // 0. 缓存命中（按模式）：媒体清单、房源信息、COS 配置（含自定义域名）都没变化 → 直接复用上次链接，零上传
         // v1.23：压缩开关也纳入缓存校验——开关变化 → 旧缓存失效 → 重新压缩上传
+        // v1.25：HTML 模板版本纳入校验——模板改动 → 旧缓存失效 → 重新生成新页面（避免改设计后还用旧链接）
         let compressOnShare = UserDefaults.standard.bool(forKey: "compressOnShare")
         if let cached = ShareCacheStore.load(roomKey: roomKey, mode: mode.rawValue),
            cached.bucket == config.bucket,
            cached.region == config.region,
            (cached.customDomain ?? "") == config.customDomain,
            (cached.compressOnShare ?? false) == compressOnShare,
+           (cached.templateVersion ?? 0) == htmlTemplateVersion,
            Set(cached.mediaFiles) == Set(mediaFiles),
            cached.info == info,
            let cachedURL = URL(string: cached.shareURL) {
@@ -177,8 +189,10 @@ enum CosUploader {
             return l < r
         }
 
-        // 3. 上传新增媒体并生成绝对 GET 签名 URL；视频生成封面播放器（无 src），图片收集 URL 待模板渲染（背景图防保存）
+        // 3. 上传新增媒体并生成绝对 GET 签名 URL；视频生成封面播放器（封面用独立首帧图），图片收集 URL 待模板渲染（img 渲染）
         // v1.23：开启「分享时压缩」开关 → 视频压到 720p（H.264 mp4）、图片轻压缩（长边≤1600 JPEG q0.8）后再上传
+        // v1.25：视频封面改为独立首帧图（vthumb.jpg）——封面不再用视频 URL 当背景图，彻底避免微信预取视频流；
+        //   video 标签无 src 无 poster，微信绝无自动播放的可能，只有点击封面才注入 src 播放
         var videoTags: [String] = []
         var imageAbsURLs: [String] = []
         for item in ordered {
@@ -198,12 +212,16 @@ enum CosUploader {
                     }
                 }
                 try await upload(data: data, to: remotePath, contentType: contentType, config: config)
+                // v1.25：视频同时上传首帧封面图（几十 KB），页面封面用图片而非视频流
+                if item.kind == "video", let thumbData = makeVideoThumbJPEG(from: url) {
+                    try? await upload(data: thumbData, to: "h/\(roomKey)/\(item.name).vthumb.jpg", contentType: "image/jpeg", config: config)
+                }
             }
             let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
             if item.kind == "video" {
-                // v1.24：视频不自动播放（根治方案：video 不带 src，只显示封面+播放按钮，点击后才注入 src 播放；
-                // 微信无法自动播放没有 src 的视频）
-                videoTags.append("<div class=\"vwrap\" onclick=\"playVideo(this,'\(absURL)')\"><div class=\"vthumb\" style=\"background-image:url('\(absURL)')\"></div><div class=\"vplay\">▶</div><video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\" poster=\"\(absURL)\"></video></div>")
+                // v1.25：video 无 src、无 poster、无 autoplay；封面用独立首帧图；点击封面 playVideo 才注入 src 并播放
+                let thumbURL = (try? presignedGetURL(for: "h/\(roomKey)/\(item.name).vthumb.jpg", expires: shareLinkExpires, config: config).absoluteString) ?? absURL
+                videoTags.append("<div class=\"vwrap\" onclick=\"playVideo(this,'\(absURL)')\"><div class=\"vthumb\" style=\"background-image:url('\(thumbURL)')\"></div><div class=\"vplay\">▶</div><video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\"></video></div>")
             } else {
                 imageAbsURLs.append(absURL)
             }
@@ -256,7 +274,7 @@ enum CosUploader {
         }
         try await upload(data: Data(html.utf8), to: pagePath, contentType: "text/html; charset=utf-8", config: config)
 
-        // 6. 更新缓存（按模式分文件；含自定义域名与压缩开关，任一变化后旧缓存自动失效）
+        // 6. 更新缓存（按模式分文件；含自定义域名、压缩开关与模板版本，任一变化后旧缓存自动失效）
         ShareCacheStore.save(roomKey: roomKey, mode: mode.rawValue, record: ShareCacheRecord(
             mediaFiles: mediaFiles,
             info: info,
@@ -264,7 +282,8 @@ enum CosUploader {
             bucket: config.bucket,
             region: config.region,
             customDomain: config.customDomain,
-            compressOnShare: compressOnShare
+            compressOnShare: compressOnShare,
+            templateVersion: htmlTemplateVersion
         ))
 
         return versionedURL
@@ -283,6 +302,8 @@ enum CosUploader {
 
         // 0. 集合缓存键：模式 + 房号排序拼接（房号变化 → 键变化 → 自动新链接）
         // v1.23：压缩开关纳入缓存校验——开关变化 → 合集重新压缩上传
+        // v1.25：①模板版本纳入校验——模板改动 → 旧合集缓存自动失效重新生成；
+        //   ②合集房源比较改为【顺序无关】（Set）——多选点选顺序变化不再误判为变化导致重传
         let compressOnShare = UserDefaults.standard.bool(forKey: "compressOnShare")
         let sortedKeys = validRooms.map { $0.roomKey }.sorted().joined(separator: "_")
         let cacheKey = "collection_\(sortedKeys)"
@@ -292,9 +313,10 @@ enum CosUploader {
            cached.region == config.region,
            (cached.customDomain ?? "") == config.customDomain,
            (cached.compressOnShare ?? false) == compressOnShare,
+           (cached.templateVersion ?? 0) == htmlTemplateVersion,
            cached.info.name == name,
            cached.info.phone == phone,
-           cached.collectionRooms == validRooms,
+           Set(cached.collectionRooms ?? []) == Set(validRooms),
            let url = URL(string: cached.shareURL) {
             return url
         }
@@ -325,9 +347,15 @@ enum CosUploader {
                     }
                 }
                 try await upload(data: data, to: remotePath, contentType: contentType, config: config)
+                // v1.25：视频同时上传首帧封面图（几十 KB），页面封面用图片而非视频流
+                if m.kind == "video", let thumbData = makeVideoThumbJPEG(from: url) {
+                    try? await upload(data: thumbData, to: "h/\(item.roomKey)/\(m.name).vthumb.jpg", contentType: "image/jpeg", config: config)
+                }
                 let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
                 if m.kind == "video" {
-                    videoTags.append("<div class=\"vwrap\" onclick=\"playVideo(this,'\(absURL)')\"><div class=\"vthumb\" style=\"background-image:url('\(absURL)')\"></div><div class=\"vplay\">▶</div><video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\" poster=\"\(absURL)\"></video></div>")
+                    // v1.25：video 无 src、无 poster、无 autoplay；封面用独立首帧图；点击封面 playVideo 才注入 src 并播放
+                    let thumbURL = (try? presignedGetURL(for: "h/\(item.roomKey)/\(m.name).vthumb.jpg", expires: shareLinkExpires, config: config).absoluteString) ?? absURL
+                    videoTags.append("<div class=\"vwrap\" onclick=\"playVideo(this,'\(absURL)')\"><div class=\"vthumb\" style=\"background-image:url('\(thumbURL)')\"></div><div class=\"vplay\">▶</div><video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\"></video></div>")
                 } else {
                     imageAbsURLs.append(absURL)
                 }
@@ -368,7 +396,8 @@ enum CosUploader {
             region: config.region,
             customDomain: config.customDomain,
             compressOnShare: compressOnShare,
-            collectionRooms: validRooms
+            collectionRooms: validRooms,
+            templateVersion: htmlTemplateVersion
         ))
 
         return versionedURL
@@ -445,7 +474,8 @@ enum CosUploader {
         .vwrap video{width:100%;height:100%;display:none;background:#000;}
         .vwrap.playing .vthumb,.vwrap.playing .vplay{display:none;}
         .vwrap.playing video{display:block;}
-        .cell{width:100%;aspect-ratio:4/3;border-radius:10px;background-size:cover;background-position:center;background-color:#e8e8ec;margin-bottom:10px;}
+        .cellwrap{width:100%;aspect-ratio:4/3;border-radius:10px;overflow:hidden;background-color:#e8e8ec;margin-bottom:10px;cursor:pointer;}
+        .cell{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;-webkit-user-drag:none;-webkit-touch-callout:none;}
         .card{background:#fff;border-radius:16px;padding:16px;margin-top:12px;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
         .row{display:flex;align-items:center;justify-content:center;gap:8px;}
@@ -494,7 +524,7 @@ enum CosUploader {
         var GALLERY=[\(galleryJS)];var gi=0;
         function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}v.play();w.className=w.className+' playing';}
         function openImg(i){gi=i;show();}
-        function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"')";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
+        function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"'";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
         function lbPrev(){gi=(gi-1+GALLERY.length)%GALLERY.length;show();}
         function lbNext(){gi=(gi+1)%GALLERY.length;show();}
         function lbClose(){document.getElementById('lb').style.display='none';}
@@ -552,7 +582,8 @@ enum CosUploader {
         .vwrap video{width:100%;height:100%;display:none;background:#000;}
         .vwrap.playing .vthumb,.vwrap.playing .vplay{display:none;}
         .vwrap.playing video{display:block;}
-        .cell{width:100%;aspect-ratio:4/3;border-radius:10px;background-size:cover;background-position:center;background-color:#e8e8ec;margin-bottom:10px;}
+        .cellwrap{width:100%;aspect-ratio:4/3;border-radius:10px;overflow:hidden;background-color:#e8e8ec;margin-bottom:10px;cursor:pointer;}
+        .cell{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;-webkit-user-drag:none;-webkit-touch-callout:none;}
         .card{background:#fff;border-radius:16px;padding:16px;margin-top:12px;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
         .row{display:flex;align-items:center;justify-content:center;gap:8px;}
@@ -599,7 +630,7 @@ enum CosUploader {
         var GALLERY=[\(galleryJS)];var gi=0;
         function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}v.play();w.className=w.className+' playing';}
         function openImg(i){gi=i;show();}
-        function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"')";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
+        function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"'";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
         function lbPrev(){gi=(gi-1+GALLERY.length)%GALLERY.length;show();}
         function lbNext(){gi=(gi+1)%GALLERY.length;show();}
         function lbClose(){document.getElementById('lb').style.display='none';}
@@ -630,11 +661,11 @@ enum CosUploader {
         let desc: String
         switch mode {
         case .masked:
-            title = "已为你挑选米兰\(count)套优质房源"
+            title = "已为你挑选\(count)套优质房源"
             desc = "利保米兰公馆\n\(name)-\(phone)"
         case .full:
             let minPrice = rooms.map { $0.item.priceText }.min() ?? ""
-            title = "已为你挑选米兰\(count)套优质房源"
+            title = "已为你挑选\(count)套优质房源"
             desc = (minPrice.isEmpty ? "精选\(count)套房源" : "精选\(count)套房源 · 起租\(minPrice)") + "\n\(name)-\(phone)"
         }
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
@@ -645,7 +676,9 @@ enum CosUploader {
         var gallery: [String] = []
         var cursor = 0
         for (index, room) in rooms.enumerated() {
-            let cover = room.coverSrc.isEmpty ? "" : " style=\"background-image:url('\\(room.coverSrc)')\""
+            // v1.25：缩略图改用 <img> 标签渲染（微信 WebView 对背景图/动态注入元素的 background-image 加载不可靠，
+            // <img> 是原生图片加载最稳的方式）；draggable=false + touch-callout:none 防长按保存
+            let cover = room.coverSrc.isEmpty ? "" : " src=\"\(room.coverSrc)\""
             let metaHTML: String
             if mode == .masked {
                 metaHTML = """
@@ -664,7 +697,7 @@ enum CosUploader {
             }
             listItems.append("""
             <div class="item" onclick="showDetail(\(index))">
-              <div class="thumb"\(cover)></div>
+              <img class="thumb"\(cover) draggable="false" alt="">
               \(metaHTML)
             </div>
             """)
@@ -701,7 +734,7 @@ enum CosUploader {
         .coll-sub{font-size:14px;color:rgba(255,255,255,.85);}
         .items{margin-top:12px;}
         .item{display:flex;gap:12px;background:#fff;border-radius:14px;padding:12px;margin-bottom:10px;align-items:center;}
-        .thumb{width:96px;height:72px;border-radius:10px;background-size:cover;background-position:center;background-color:#e8e8ec;flex-shrink:0;}
+        .thumb{width:96px;height:72px;border-radius:10px;object-fit:cover;display:block;background-color:#e8e8ec;flex-shrink:0;pointer-events:none;-webkit-user-drag:none;-webkit-touch-callout:none;}
         .meta{flex:1;min-width:0;}
         .rno{font-size:17px;font-weight:700;color:#1c1c1e;}
         .sub2{font-size:13px;color:#8e8e93;margin-top:4px;}
@@ -727,7 +760,8 @@ enum CosUploader {
         .vwrap video{width:100%;height:100%;display:none;background:#000;}
         .vwrap.playing .vthumb,.vwrap.playing .vplay{display:none;}
         .vwrap.playing video{display:block;}
-        .cell{width:100%;aspect-ratio:4/3;border-radius:10px;background-size:cover;background-position:center;background-color:#e8e8ec;margin-bottom:10px;}
+        .cellwrap{width:100%;aspect-ratio:4/3;border-radius:10px;overflow:hidden;background-color:#e8e8ec;margin-bottom:10px;cursor:pointer;}
+        .cell{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;-webkit-user-drag:none;-webkit-touch-callout:none;}
         .card{background:#fff;border-radius:16px;padding:16px;margin-top:12px;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
         .row{display:flex;align-items:center;justify-content:center;gap:8px;}
@@ -775,7 +809,7 @@ enum CosUploader {
         function showDetail(i){document.getElementById('listView').style.display='none';document.getElementById('detailView').style.display='block';document.getElementById('detailBody').innerHTML=ROOMS[i];window.scrollTo(0,0);}
         function showList(){document.getElementById('detailView').style.display='none';document.getElementById('listView').style.display='block';window.scrollTo(0,0);}
         function openImg(i){gi=i;show();}
-        function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"')";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
+        function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"'";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
         function lbPrev(){gi=(gi-1+GALLERY.length)%GALLERY.length;show();}
         function lbNext(){gi=(gi+1)%GALLERY.length;show();}
         function lbClose(){document.getElementById('lb').style.display='none';}
@@ -813,20 +847,23 @@ enum CosUploader {
         parts.append("</div>")
         var media = "<h2 class=\"sec\">实拍 · 点击放大</h2><div class=\"media\">"
         for tag in videoTags { media += tag }
+        // v1.25：图片用 <img> 渲染（修复空白），img 自身 pointer-events:none + 外层 div 点击放大——防长按保存
         for (offset, url) in imageURLs.enumerated() {
-            media += "<div class=\"cell\" style=\"background-image:url('\\(url)')\" onclick=\"openImg(\(startIndex + offset))\"></div>"
+            media += "<div class=\"cellwrap\" onclick=\"openImg(\(startIndex + offset))\"><img class=\"cell\" src=\"\(url)\" draggable=\"false\" alt=\"\"></div>"
         }
         media += "</div>"
         parts.append(media)
         return parts.joined(separator: "")
     }
 
-    /// 媒体块：视频封面播放器原样输出（置顶），图片渲染为背景图 div（单列、防长按保存、点击放大进 GALLERY）
+    /// 媒体块：视频封面播放器原样输出（置顶），图片用 <img> 渲染（单列、防长按保存、点击放大进 GALLERY）
+    /// v1.25：图片从 background-image div 改为 <img>（修复微信 WebView 缩略图空白）；
+    ///   img 包在 .cellwrap 里且自身 pointer-events:none——长按落在外层 div 上，微信不会弹「保存图片」
     private static func mediaBlockHTML(videoTags: [String], imageURLs: [String]) -> String {
         var parts: [String] = []
         for tag in videoTags { parts.append(tag) }
         for (index, url) in imageURLs.enumerated() {
-            parts.append("<div class=\"cell\" style=\"background-image:url('\\(url)')\" onclick=\"openImg(\(index))\"></div>")
+            parts.append("<div class=\"cellwrap\" onclick=\"openImg(\(index))\"><img class=\"cell\" src=\"\(url)\" draggable=\"false\" alt=\"\"></div>")
         }
         guard !parts.isEmpty else { return "" }
         return "<div class=\"media\">" + parts.joined(separator: "") + "</div>"
@@ -849,6 +886,33 @@ enum CosUploader {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&#39;")
+    }
+
+    // MARK: - v1.25 视频首帧封面图
+
+    /// 从视频提取首帧生成 JPEG 封面（最长边 640px、质量 0.72，通常几十 KB）。
+    /// v1.25：分享页视频封面改用独立首帧图——页面加载只下载小封面图，绝不预取视频流，
+    /// 微信没有任何机会自动播放/预载视频；只有用户点击封面 playVideo 才注入视频 src。
+    /// 提取失败返回 nil，调用方回退用视频 URL 本身当封面（微信可显示首帧）。
+    private static func makeVideoThumbJPEG(from url: URL) -> Data? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 640, height: 640)
+        let time = CMTime(seconds: 0.1, preferredTimescale: 600)
+        guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { return nil }
+        let image = UIImage(cgImage: cgImage)
+        let maxSide: CGFloat = 640
+        let w = image.size.width
+        let h = image.size.height
+        guard w > 0, h > 0 else { return nil }
+        let scale = min(maxSide / max(w, h), 1)
+        let target = CGSize(width: max(Int(w * scale), 1), height: max(Int(h * scale), 1))
+        UIGraphicsBeginImageContextWithOptions(target, false, 1.0)
+        image.draw(in: CGRect(origin: .zero, size: target))
+        let scaled = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        return scaled?.jpegData(compressionQuality: 0.72)
     }
 
     // MARK: - 上传 / 预签名
