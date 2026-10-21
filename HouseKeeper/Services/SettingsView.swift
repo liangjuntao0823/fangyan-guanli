@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 /// 设置页（v1.22 重构：归拢成两个入口——远程配置 / 名片信息）
 /// 远程配置：腾讯云 COS 存储桶、密钥、自定义域名（用于分享房源卡片链接）
@@ -195,16 +196,23 @@ struct CosConfigView: View {
 /// （分享缓存里存了名片，名片一变缓存自动失效，无需手动清缓存）。
 /// v1.26：①新增实时名片预览；②说明应用范围覆盖所有出现姓名/电话的位置
 /// （H5 名片区、微信卡片描述、页面底栏电话、拨打电话/复制电话）。
+/// v1.27：新增「微信二维码」入口——从相册选择二维码图片保存（Documents/qrcode.png），
+/// 分享时自动上传 COS 并显示在所有 H5 名片板块左侧，访客长按可直接被微信识别。
 struct ShareProfileView: View {
     @State private var shareName = ""
     @State private var sharePhone = ""
     @State private var savedTip: String?
+    @State private var qrImage: UIImage?
+    @State private var qrPickerItem: PhotosPickerItem?
 
     init() {
         let n = KeychainStore.load(KeychainKey.shareName) ?? "梁涛"
         let p = KeychainStore.load(KeychainKey.sharePhone) ?? "13288251132"
         _shareName = State(initialValue: n)
         _sharePhone = State(initialValue: p)
+        if let data = QrcodeStore.loadData() {
+            _qrImage = State(initialValue: UIImage(data: data))
+        }
     }
 
     /// 预览用的姓名/电话：输入为空时显示默认值（与分享时行为一致）
@@ -252,6 +260,22 @@ struct ShareProfileView: View {
                             .background(Color(.systemGray6))
                             .clipShape(Capsule())
                     }
+                    // v1.27：二维码预览（有则显示缩略图，无则提示）
+                    if let qrImage {
+                        Image(uiImage: qrImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 104, height: 104)
+                            .background(Color.white)
+                            .cornerRadius(10)
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(.systemGray4), lineWidth: 1))
+                            .padding(.top, 6)
+                    } else {
+                        Text("未设置微信二维码")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 6)
+                    }
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity)
@@ -273,6 +297,35 @@ struct ShareProfileView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(shareName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            // v1.27：微信二维码——相册选择保存；分享时自动上传，显示在所有 H5 名片板块左侧
+            Section(header: Text("微信二维码"), footer: Text("二维码会显示在所有分享 H5 页面的名片板块左侧（拨打电话/复制电话上方），访客长按二维码即可弹出微信「识别图中二维码」菜单。更换后无需重新分享——已发出的链接也会自动显示新二维码。")) {
+                PhotosPicker(selection: $qrPickerItem, matching: .images) {
+                    Label(qrImage == nil ? "选择二维码图片" : "更换二维码图片", systemImage: "qrcode")
+                }
+                .onChange(of: qrPickerItem) { _, newItem in
+                    guard let newItem else { return }
+                    Task {
+                        if let data = try? await newItem.loadTransferable(type: Data.self),
+                           let image = UIImage(data: data),
+                           let jpeg = image.jpegData(compressionQuality: 0.9) {
+                            let ok = QrcodeStore.save(jpeg)
+                            qrImage = UIImage(data: jpeg)
+                            savedTip = ok ? "微信二维码已更新 ✅\n下次分享起所有 H5 名片板块都会显示新二维码" : "保存二维码失败，请重试"
+                        } else {
+                            savedTip = "无法读取所选图片，请换一张清晰的二维码图片"
+                        }
+                        qrPickerItem = nil
+                    }
+                }
+                if qrImage != nil {
+                    Button("清除二维码", role: .destructive) {
+                        QrcodeStore.clear()
+                        qrImage = nil
+                        savedTip = "二维码已清除，下次分享的页面将不再显示二维码"
+                    }
+                }
             }
         }
         .navigationTitle("名片信息")
