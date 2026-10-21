@@ -126,7 +126,11 @@ struct SettingsView: View {
                 }
                 // v1.35：已收录房源套数——以本地 Media/ 房号文件夹数量为准
                 HStack {
-                    Label("已收录房源", systemImage: "building.2")
+                    Label {
+                        Text(verbatim: "已收录房源")
+                    } icon: {
+                        Image(systemName: "building.2")
+                    }
                     Spacer()
                     Text("\(MediaStore.houseCount()) 套")
                         .foregroundColor(.secondary)
@@ -191,9 +195,9 @@ struct SettingsView: View {
 /// v1.20：保存改为「保存并验证连接」——写入钥匙串成功后立即用当前配置向 COS 上传一个测试文件
 /// 并回读，真实连通才算保存成功；任何环节失败都会给出具体错误码（桶不存在/签名错误/域名未生效），
 /// 不再静默提示「已保存」；同时密钥写入失败也会明确报出。
-// MARK: - COS 配置备份 / 恢复（v1.33 剪贴板版 → v1.34 文件版 → v1.35 直写备份文件夹）
+// MARK: - COS 配置备份 / 恢复（v1.33 剪贴板版 → v1.34 文件版）
 
-/// 把钥匙串里的 COS 配置导出为 JSON（v1.34 改为生成「桶名_地域_日期.json」文件；v1.35 直接写入「备份」子文件夹），
+/// 把钥匙串里的 COS 配置导出为 JSON（v1.34 改为生成「桶名_地域_日期.json」文件由用户选择位置保存），
 /// 换机 / 重装 / 误改后可从备份文件一键恢复。配置含密钥，备份文件请妥善保管。
 enum CosConfigBackup {
     static func exportJSON() -> String? {
