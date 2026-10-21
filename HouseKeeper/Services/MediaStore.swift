@@ -1,6 +1,23 @@
 import Foundation
 
-/// 房源照片 / 视频文件管理：按房号子目录存到 App 的 Documents/Media/<房号>/ 目录
+// MARK: - v1.30 数据根目录（全部数据集中在 Documents/备份/ 子文件夹）
+/// 微信式备份 v1.30：所有需要备份的数据文件**默认直接存放在「备份」子文件夹**里：
+///   housekeeper.store（数据库三件套）、Media/（图片视频按房号分文件夹）、
+///   qrcode.png（名片二维码）、ShareCache/（分享缓存）、备份说明.txt
+/// 「文件」App 里「房源管家」根目录保持整洁，只看到一个「备份」文件夹；
+/// 复制「备份」子文件夹（或整个「房源管家」文件夹）= 备份，放回 = 恢复。
+enum DataRoot {
+    static let name = "备份"
+
+    static func url() -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+}
+
+/// 房源照片 / 视频文件管理：按房号子目录存到 App 的 Documents/备份/Media/<房号>/ 目录
 /// 数据库里只保存文件名，文件本体在磁盘，避免 SwiftData 存储膨胀
 /// Documents 已开启文件共享（UIFileSharingEnabled），可在 iOS「文件」App 中查看
 /// 文件命名规则：照片「房号-JPG-1.jpg / 房号-JPG-2.jpg …」，视频「房号-MOV-1.mov / 房号-MOV-2.mov …」
@@ -9,8 +26,7 @@ enum MediaStore {
     static let mediaDirectoryName = "Media"
 
     static func mediaDirectory() -> URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dir = docs.appendingPathComponent(mediaDirectoryName, isDirectory: true)
+        let dir = DataRoot.url().appendingPathComponent(mediaDirectoryName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -96,32 +112,30 @@ enum MediaStore {
     }
 }
 
-// MARK: - v1.29 数据备份说明（微信式文件夹备份）
+// MARK: - v1.30 数据备份说明（微信式文件夹备份）
 
-/// 在 Documents 生成「备份说明.txt」，引导用户：备份 = 复制整个「房源管家」文件夹，恢复 = 放回原位。
-/// v1.29 起全部数据都在 Documents 下（用户可见、可整体复制）：
-///   housekeeper.store（房源信息数据库）+ Media/（图片视频，按房号分文件夹）+ 备份说明.txt
+/// 在「备份」子文件夹生成「备份说明.txt」（只写一次），引导用户：备份 = 复制「备份」子文件夹，恢复 = 放回原位。
 enum BackupGuide {
     static func ensureExists() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let url = docs.appendingPathComponent("备份说明.txt")
+        let url = DataRoot.url().appendingPathComponent("备份说明.txt")
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
         let text = """
         「房源管家」数据备份说明
         ========================
 
-        本 App 的全部数据都在当前这个文件夹里：
+        本 App 的全部数据都放在「备份」这个子文件夹里：
         · housekeeper.store（房源信息数据库）
         · Media/（所有房源图片和视频，按房号分文件夹）
+        · qrcode.png（名片二维码）
+        · ShareCache/（分享缓存，可忽略）
 
-        【备份】在 iOS「文件」App → 我的 iPhone → 房源管家，长按本文件夹 → 拷贝/共享到
-        电脑、网盘或微信（建议存两处）。整个文件夹一起复制，一个都不能少。
+        【备份】在 iOS「文件」App → 我的 iPhone → 房源管家 → 备份，长按「备份」文件夹 →
+        拷贝/共享到电脑、网盘或微信（建议存两处）。整个「备份」文件夹一起复制，一个都不能少。
 
-        【恢复】重装 App 后，把之前备份的整个文件夹内容放回「文件」App → 我的 iPhone →
-        房源管家 目录，再打开 App，房源信息和图片视频全部还原。
+        【恢复】重装 App 后，把之前备份的「备份」文件夹放回「文件」App → 我的 iPhone →
+        房源管家 目录内，再打开 App，房源信息和图片视频全部还原。
 
-        【注意】不要只复制 housekeeper.store——图片视频在 Media/ 里，
-        备份必须复制整个文件夹。
+        【注意】不要只复制 housekeeper.store——图片视频在 Media/ 里，备份必须复制整个「备份」文件夹。
         """
         try? text.write(to: url, atomically: true, encoding: .utf8)
     }
@@ -146,8 +160,7 @@ struct ShareCacheRecord: Codable {
 
 enum ShareCacheStore {
     private static var directory: URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dir = docs.appendingPathComponent("ShareCache", isDirectory: true)
+        let dir = DataRoot.url().appendingPathComponent("ShareCache", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
