@@ -2,6 +2,7 @@ import Foundation
 import CryptoKit
 import Security
 import UIKit
+import AVFoundation
 
 // MARK: - 钥匙串存取（COS 密钥等敏感配置）
 
@@ -144,10 +145,13 @@ enum CosUploader {
         guard !config.customDomain.isEmpty else { throw CosError.customDomainMissing }
 
         // 0. 缓存命中（按模式）：媒体清单、房源信息、COS 配置（含自定义域名）都没变化 → 直接复用上次链接，零上传
+        // v1.23：压缩开关也纳入缓存校验——开关变化 → 旧缓存失效 → 重新压缩上传
+        let compressOnShare = UserDefaults.standard.bool(forKey: "compressOnShare")
         if let cached = ShareCacheStore.load(roomKey: roomKey, mode: mode.rawValue),
            cached.bucket == config.bucket,
            cached.region == config.region,
            (cached.customDomain ?? "") == config.customDomain,
+           (cached.compressOnShare ?? false) == compressOnShare,
            Set(cached.mediaFiles) == Set(mediaFiles),
            cached.info == info,
            let cachedURL = URL(string: cached.shareURL) {
@@ -158,7 +162,8 @@ enum CosUploader {
         var toUpload = mediaFiles
         if let cached = ShareCacheStore.load(roomKey: roomKey, mode: mode.rawValue),
            cached.bucket == config.bucket,
-           cached.region == config.region {
+           cached.region == config.region,
+           (cached.compressOnShare ?? false) == compressOnShare {
             let cachedSet = Set(cached.mediaFiles)
             toUpload = mediaFiles.filter { !cachedSet.contains($0) }
         }
@@ -171,6 +176,7 @@ enum CosUploader {
         }
 
         // 3. 上传新增媒体并生成绝对 GET 签名 URL；视频生成 video 标签，图片收集 URL 待模板渲染（背景图防保存）
+        // v1.23：开启「分享时压缩」开关 → 视频压到 720p（H.264 mp4）、图片轻压缩（长边≤1600 JPEG q0.8）后再上传
         var videoTags: [String] = []
         var imageAbsURLs: [String] = []
         for item in ordered {
@@ -178,13 +184,23 @@ enum CosUploader {
             if toUpload.contains(item) {
                 let url = MediaStore.url(for: item.name, roomKey: roomKey)
                 guard FileManager.default.fileExists(atPath: url.path) else { continue }
-                let data = try Data(contentsOf: url)
-                try await upload(data: data, to: remotePath, contentType: mimeType(for: item.kind), config: config)
+                var data = try Data(contentsOf: url)
+                var contentType = mimeType(for: item.kind)
+                if compressOnShare {
+                    if item.kind == "video", let compressed = await compressedVideoData(from: url) {
+                        data = compressed
+                        contentType = "video/mp4"
+                    } else if item.kind == "image", let compressed = compressedImageData(from: url) {
+                        data = compressed
+                        contentType = "image/jpeg"
+                    }
+                }
+                try await upload(data: data, to: remotePath, contentType: contentType, config: config)
             }
             let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
             if item.kind == "video" {
-                // v1.22：preload=none —— 视频不自动播放，点击才播（poster 仍显示首帧封面）
-                videoTags.append("<video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
+                // v1.23：视频自动播放（autoplay+muted+playsinline，微信内 H5 必须静音才能自动播；保留 controls 可调音量/暂停）
+                videoTags.append("<video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline autoplay muted preload=\"auto\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
             } else {
                 imageAbsURLs.append(absURL)
             }
@@ -237,14 +253,15 @@ enum CosUploader {
         }
         try await upload(data: Data(html.utf8), to: pagePath, contentType: "text/html; charset=utf-8", config: config)
 
-        // 6. 更新缓存（按模式分文件；含自定义域名，换域名后旧缓存自动失效）
+        // 6. 更新缓存（按模式分文件；含自定义域名与压缩开关，任一变化后旧缓存自动失效）
         ShareCacheStore.save(roomKey: roomKey, mode: mode.rawValue, record: ShareCacheRecord(
             mediaFiles: mediaFiles,
             info: info,
             shareURL: versionedURL.absoluteString,
             bucket: config.bucket,
             region: config.region,
-            customDomain: config.customDomain
+            customDomain: config.customDomain,
+            compressOnShare: compressOnShare
         ))
 
         return versionedURL
@@ -262,6 +279,8 @@ enum CosUploader {
         let phone = profile.phone
 
         // 0. 集合缓存键：模式 + 房号排序拼接（房号变化 → 键变化 → 自动新链接）
+        // v1.23：压缩开关纳入缓存校验——开关变化 → 合集重新压缩上传
+        let compressOnShare = UserDefaults.standard.bool(forKey: "compressOnShare")
         let sortedKeys = validRooms.map { $0.roomKey }.sorted().joined(separator: "_")
         let cacheKey = "collection_\(sortedKeys)"
         let cacheMode = "collection-\(mode.rawValue)"
@@ -269,6 +288,7 @@ enum CosUploader {
            cached.bucket == config.bucket,
            cached.region == config.region,
            (cached.customDomain ?? "") == config.customDomain,
+           (cached.compressOnShare ?? false) == compressOnShare,
            cached.info.name == name,
            cached.info.phone == phone,
            cached.collectionRooms == validRooms,
@@ -290,11 +310,21 @@ enum CosUploader {
                 let remotePath = "h/\(item.roomKey)/\(m.name)"
                 let url = MediaStore.url(for: m.name, roomKey: item.roomKey)
                 guard FileManager.default.fileExists(atPath: url.path) else { continue }
-                let data = try Data(contentsOf: url)
-                try await upload(data: data, to: remotePath, contentType: mimeType(for: m.kind), config: config)
+                var data = try Data(contentsOf: url)
+                var contentType = mimeType(for: m.kind)
+                if compressOnShare {
+                    if m.kind == "video", let compressed = await compressedVideoData(from: url) {
+                        data = compressed
+                        contentType = "video/mp4"
+                    } else if m.kind == "image", let compressed = compressedImageData(from: url) {
+                        data = compressed
+                        contentType = "image/jpeg"
+                    }
+                }
+                try await upload(data: data, to: remotePath, contentType: contentType, config: config)
                 let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
                 if m.kind == "video" {
-                    videoTags.append("<video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
+                    videoTags.append("<video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline autoplay muted preload=\"auto\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
                 } else {
                     imageAbsURLs.append(absURL)
                 }
@@ -334,6 +364,7 @@ enum CosUploader {
             bucket: config.bucket,
             region: config.region,
             customDomain: config.customDomain,
+            compressOnShare: compressOnShare,
             collectionRooms: validRooms
         ))
 
@@ -498,10 +529,10 @@ enum CosUploader {
         .hero{background:linear-gradient(135deg,#1f3a5f,#2d5f8a);color:#fff;border-radius:16px;padding:20px 20px 16px;}
         .l1{display:flex;justify-content:space-between;align-items:baseline;}
         .room{font-size:30px;font-weight:700;}
-        .layout2{font-size:18px;color:rgba(255,255,255,.9);}
+        .price{font-size:30px;font-weight:700;color:#f5c46b;}
         .l2{display:flex;align-items:baseline;gap:14px;margin-top:12px;}
-        .price{font-size:22px;font-weight:700;color:#f5c46b;}
         .pw{font-size:18px;color:rgba(255,255,255,.9);}
+        .layout2{font-size:18px;color:rgba(255,255,255,.9);}
         .host{margin-left:auto;font-size:18px;color:rgba(255,255,255,.9);}
         .remark{margin-top:10px;font-size:13px;color:rgba(255,255,255,.7);}
         .sec{font-size:15px;color:#3a3a3c;margin:18px 4px 10px;font-weight:600;}
@@ -531,8 +562,8 @@ enum CosUploader {
         <body oncontextmenu="return false">
         <div class="wrap">
         <section class="hero">
-          <div class="l1"><span class="room">\(escapeHTML(info.displayRoomNo))</span><span class="layout2">\(layoutText)</span></div>
-          <div class="l2"><span class="price">\(escapeHTML(info.priceText))</span>\(pw)\(host)</div>
+          <div class="l1"><span class="room">\(escapeHTML(info.displayRoomNo))</span><span class="price">\(escapeHTML(info.priceText))</span></div>
+          <div class="l2">\(pw)<span class="layout2">\(layoutText)</span>\(host)</div>
           \(remarkLine)
         </section>
         <h2 class="sec">实拍 · 点击放大</h2>
@@ -593,20 +624,33 @@ enum CosUploader {
         }
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
 
-        // 列表项
+        // 列表项：v1.23 脱敏版只显示户型（隐藏房号/价格），完整版显示房号 + 价格·户型
         var listItems: [String] = []
         var detailsJS: [String] = []
         var gallery: [String] = []
         var cursor = 0
         for (index, room) in rooms.enumerated() {
-            let cover = room.coverSrc.isEmpty ? "" : " style=\"background-image:url('\(room.coverSrc)')\""
+            let cover = room.coverSrc.isEmpty ? "" : " style=\"background-image:url('\\(room.coverSrc)')\""
+            let metaHTML: String
+            if mode == .masked {
+                metaHTML = """
+                <div class="meta">
+                  <div class="rno">\(escapeHTML(room.item.layout.isEmpty ? "房源" : room.item.layout))</div>
+                  <div class="sub2">利保米兰公馆</div>
+                </div>
+                """
+            } else {
+                metaHTML = """
+                <div class="meta">
+                  <div class="rno">\(escapeHTML(room.item.displayRoomNo))</div>
+                  <div class="sub2">\(escapeHTML(room.item.priceText)) · \(escapeHTML(room.item.layout.isEmpty ? "房源" : room.item.layout))</div>
+                </div>
+                """
+            }
             listItems.append("""
             <div class="item" onclick="showDetail(\(index))">
               <div class="thumb"\(cover)></div>
-              <div class="meta">
-                <div class="rno">\(escapeHTML(room.item.displayRoomNo))</div>
-                <div class="sub2">\(escapeHTML(room.item.priceText)) · \(escapeHTML(room.item.layout.isEmpty ? "房源" : room.item.layout))</div>
-              </div>
+              \(metaHTML)
             </div>
             """)
 
@@ -654,10 +698,10 @@ enum CosUploader {
         .nav-pill{display:inline-flex;align-items:center;gap:4px;background:rgba(255,255,255,.18);border-radius:999px;padding:6px 12px;font-size:13px;margin-left:auto;}
         .l1{display:flex;justify-content:space-between;align-items:baseline;}
         .room{font-size:30px;font-weight:700;}
-        .layout2{font-size:18px;color:rgba(255,255,255,.9);}
+        .price{font-size:30px;font-weight:700;color:#f5c46b;}
         .l2{display:flex;align-items:baseline;gap:14px;margin-top:12px;}
-        .price{font-size:22px;font-weight:700;color:#f5c46b;}
         .pw{font-size:18px;color:rgba(255,255,255,.9);}
+        .layout2{font-size:18px;color:rgba(255,255,255,.9);}
         .host{margin-left:auto;font-size:18px;color:rgba(255,255,255,.9);}
         .remark{margin-top:10px;font-size:13px;color:rgba(255,255,255,.7);}
         .sec{font-size:15px;color:#3a3a3c;margin:18px 4px 10px;font-weight:600;}
@@ -736,9 +780,10 @@ enum CosUploader {
             </a>
             """)
         } else {
-            parts.append("<div class=\"l1\"><span class=\"room\">\(escapeHTML(item.displayRoomNo))</span><span class=\"layout2\">\(escapeHTML(item.layout.isEmpty ? "房源" : item.layout))</span></div>")
-            var l2 = "<div class=\"l2\"><span class=\"price\">\(escapeHTML(item.priceText))</span>"
+            parts.append("<div class=\"l1\"><span class=\"room\">\(escapeHTML(item.displayRoomNo))</span><span class=\"price\">\(escapeHTML(item.priceText))</span></div>")
+            var l2 = "<div class=\"l2\">"
             if !item.password.isEmpty { l2 += "<span class=\"pw\">密码：\(escapeHTML(item.password))</span>" }
+            l2 += "<span class=\"layout2\">\(escapeHTML(item.layout.isEmpty ? "房源" : item.layout))</span>"
             if !item.landlord.isEmpty { l2 += "<span class=\"host\">\(escapeHTML(item.landlord))</span>" }
             l2 += "</div>"
             parts.append(l2)
@@ -748,7 +793,7 @@ enum CosUploader {
         var media = "<h2 class=\"sec\">实拍 · 点击放大</h2><div class=\"media\">"
         for tag in videoTags { media += tag }
         for (offset, url) in imageURLs.enumerated() {
-            media += "<div class=\"cell\" style=\"background-image:url('\(url)')\" onclick=\"openImg(\(startIndex + offset))\"></div>"
+            media += "<div class=\"cell\" style=\"background-image:url('\\(url)')\" onclick=\"openImg(\(startIndex + offset))\"></div>"
         }
         media += "</div>"
         parts.append(media)
@@ -760,7 +805,7 @@ enum CosUploader {
         var parts: [String] = []
         for tag in videoTags { parts.append(tag) }
         for (index, url) in imageURLs.enumerated() {
-            parts.append("<div class=\"cell\" style=\"background-image:url('\(url)')\" onclick=\"openImg(\(index))\"></div>")
+            parts.append("<div class=\"cell\" style=\"background-image:url('\\(url)')\" onclick=\"openImg(\(index))\"></div>")
         }
         guard !parts.isEmpty else { return "" }
         return "<div class=\"media\">" + parts.joined(separator: "") + "</div>"
@@ -916,6 +961,46 @@ enum CosUploader {
         let scaled = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
         return scaled?.jpegData(compressionQuality: 0.72)
+    }
+
+    // MARK: - v1.23 分享时压缩（视频 720p / 图片轻压缩）
+
+    /// 视频压缩到 720p（H.264 mp4，shouldOptimizeForNetworkUse 利于在线播放）。
+    /// 源分辨率低于 720p 时导出保持源分辨率（preset 为上限不放大）；压缩失败返回 nil，调用方回退原文件。
+    private static func compressedVideoData(from url: URL) async -> Data? {
+        let asset = AVURLAsset(url: url)
+        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1280x720) else { return nil }
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
+        export.outputURL = temp
+        export.outputFileType = .mp4
+        export.shouldOptimizeForNetworkUse = true
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            export.exportAsynchronously {
+                cont.resume()
+            }
+        }
+        defer { try? FileManager.default.removeItem(at: temp) }
+        guard export.status == .completed, let data = try? Data(contentsOf: temp) else { return nil }
+        return data
+    }
+
+    /// 图片轻压缩：长边压到 ≤1600px、JPEG 质量 0.8（参照微信「不加载原图」的画质，不过度压缩，观感基本无损）
+    private static func compressedImageData(from url: URL) -> Data? {
+        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
+        let maxSide: CGFloat = 1600
+        let w = image.size.width
+        let h = image.size.height
+        guard w > 0, h > 0 else { return nil }
+        let scale = min(maxSide / max(w, h), 1)
+        if scale >= 1 {
+            return image.jpegData(compressionQuality: 0.8)
+        }
+        let target = CGSize(width: max(Int(w * scale), 1), height: max(Int(h * scale), 1))
+        UIGraphicsBeginImageContextWithOptions(target, false, 1.0)
+        image.draw(in: CGRect(origin: .zero, size: target))
+        let scaled = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        return scaled?.jpegData(compressionQuality: 0.8)
     }
 
     /// 在签名 URL 上追加版本参数 v。v 不参与签名（q-url-param-list 为空，COS 服务端忽略未声明参数，签名仍有效）；

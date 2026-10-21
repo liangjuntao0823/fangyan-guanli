@@ -212,7 +212,7 @@
 							GENERATE_INFOPLIST_FILE = YES;
 							INFOPLIST_KEY_CFBundleDevelopmentRegion = "zh_CN";
 							INFOPLIST_KEY_CFBundleDisplayName = "房源管家";
-							INFOPLIST_KEY_CFBundleShortVersionString = "1.22";
+							INFOPLIST_KEY_CFBundleShortVersionString = "1.23";
 							INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 							INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 							INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -223,7 +223,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-							MARKETING_VERSION = 1.22;
+							MARKETING_VERSION = 1.23;
 							PRODUCT_BUNDLE_IDENTIFIER = com.zfgj.housekeeper;
 							PRODUCT_NAME = "$(TARGET_NAME)";
 							SWIFT_EMIT_LOC_STRINGS = YES;
@@ -257,7 +257,7 @@
 							GENERATE_INFOPLIST_FILE = YES;
 							INFOPLIST_KEY_CFBundleDevelopmentRegion = "zh_CN";
 							INFOPLIST_KEY_CFBundleDisplayName = "房源管家";
-							INFOPLIST_KEY_CFBundleShortVersionString = "1.22";
+							INFOPLIST_KEY_CFBundleShortVersionString = "1.23";
 							INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 							INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 							INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -268,7 +268,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-							MARKETING_VERSION = 1.22;
+							MARKETING_VERSION = 1.23;
 							PRODUCT_BUNDLE_IDENTIFIER = com.zfgj.housekeeper;
 							PRODUCT_NAME = "$(TARGET_NAME)";
 							SWIFT_EMIT_LOC_STRINGS = YES;
@@ -287,7 +287,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDevelopmentRegion = "zh_CN";
 				INFOPLIST_KEY_CFBundleDisplayName = "房源管家";
-				INFOPLIST_KEY_CFBundleShortVersionString = "1.22";
+				INFOPLIST_KEY_CFBundleShortVersionString = "1.23";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -299,7 +299,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.22;
+				MARKETING_VERSION = 1.23;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zfgj.housekeeper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -318,7 +318,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDevelopmentRegion = "zh_CN";
 				INFOPLIST_KEY_CFBundleDisplayName = "房源管家";
-				INFOPLIST_KEY_CFBundleShortVersionString = "1.22";
+				INFOPLIST_KEY_CFBundleShortVersionString = "1.23";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -330,7 +330,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.22;
+				MARKETING_VERSION = 1.23;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zfgj.housekeeper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -351,7 +351,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		F20000010000000000000000002 /* Build configuration list for PBXNativeTarget "HouseKeeper" */ = {
+		F20000010000000000000002 /* Build configuration list for PBXNativeTarget "HouseKeeper" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				F10000010000000000000003 /* Debug */,
