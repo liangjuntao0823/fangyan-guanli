@@ -124,6 +124,13 @@ struct SettingsView: View {
                     Text(Self.documentsSizeText())
                         .foregroundColor(.secondary)
                 }
+                // v1.35：已收录房源套数——以本地 Media/ 房号文件夹数量为准
+                HStack {
+                    Label("已收录房源", systemImage: "building.2")
+                    Spacer()
+                    Text("\(MediaStore.houseCount()) 套")
+                        .foregroundColor(.secondary)
+                }
                 Button {
                     if let url = URL(string: "shareddocuments://") {
                         UIApplication.shared.open(url)
@@ -184,9 +191,9 @@ struct SettingsView: View {
 /// v1.20：保存改为「保存并验证连接」——写入钥匙串成功后立即用当前配置向 COS 上传一个测试文件
 /// 并回读，真实连通才算保存成功；任何环节失败都会给出具体错误码（桶不存在/签名错误/域名未生效），
 /// 不再静默提示「已保存」；同时密钥写入失败也会明确报出。
-// MARK: - COS 配置备份 / 恢复（v1.33 剪贴板版 → v1.34 文件版）
+// MARK: - COS 配置备份 / 恢复（v1.33 剪贴板版 → v1.34 文件版 → v1.35 直写备份文件夹）
 
-/// 把钥匙串里的 COS 配置导出为 JSON（v1.34 改为生成「桶名_地域_日期.json」文件由用户选择位置保存），
+/// 把钥匙串里的 COS 配置导出为 JSON（v1.34 改为生成「桶名_地域_日期.json」文件；v1.35 直接写入「备份」子文件夹），
 /// 换机 / 重装 / 误改后可从备份文件一键恢复。配置含密钥，备份文件请妥善保管。
 enum CosConfigBackup {
     static func exportJSON() -> String? {
@@ -255,9 +262,7 @@ struct CosConfigView: View {
     @State private var customDomain = ""
     @State private var savedTip: String?
     @State private var isVerifying = false
-    // v1.34：文件备份 / 恢复 + 清空配置
-    @State private var isExporting = false
-    @State private var exportURL: URL?
+    // v1.34：文件备份 / 恢复 + 清空配置（v1.35：备份直写「备份」文件夹，不再弹文件选择器）
     @State private var isImporting = false
     @State private var confirmClear = false
 
@@ -314,13 +319,21 @@ struct CosConfigView: View {
                     }
                 }
                 .disabled(bucket.isEmpty || region.isEmpty || secretId.isEmpty || secretKey.isEmpty || isVerifying)
+                // v1.35：访问储存桶——用当前填写的桶名/地域直接打开腾讯云 COS 控制台对应桶
+                Button {
+                    openBucketConsole()
+                } label: {
+                    Label("访问储存桶", systemImage: "safari")
+                }
+                .disabled(bucket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                         || region.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             } footer: {
-                Text("点击后 App 会用当前配置向云存储上传一个测试文件并回读，成功才提示「配置正确」；失败会直接告诉您具体原因。")
+                Text("「保存并验证连接」会用当前配置上传测试文件并回读，成功才提示「配置正确」；「访问储存桶」用当前填写的桶名和地域打开腾讯云控制台。")
             }
 
             // v1.34：备份 / 恢复配置（文件方式）——备份生成「桶名_地域_日期.json」文件，
-            // 导出位置自由选择（文件 App / iCloud / 微信等）；恢复从任意位置选择备份文件导入
-            Section(header: Text("备份 / 恢复配置"), footer: Text("备份会生成一个「桶名_地域_日期.json」文件（含密钥），导出到您选择的位置（文件 App / 微信等）妥善保存；换机 / 重装 / 误改后，点「从备份文件恢复配置」选择该文件即可一键还原。含密钥内容请勿外泄。")) {
+            // v1.35：备份文件直接生成到「房源管家」→「备份」文件夹，不再弹出文件选择器
+            Section(header: Text("备份 / 恢复配置"), footer: Text("点「备份配置到文件」后，备份文件（桶名_地域_日期.json，含密钥）会直接生成到 iOS「文件」App → 我的 iPhone → 房源管家 → 「备份」文件夹，随整个「备份」文件夹一起备份即可。换机 / 重装 / 误改后，点「从备份文件恢复配置」选择该文件即可一键还原。含密钥内容请勿外泄。")) {
                 Button {
                     prepareBackupFile()
                 } label: {
@@ -357,11 +370,6 @@ struct CosConfigView: View {
         }
         .navigationTitle("远程配置")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $isExporting) {
-            if let exportURL {
-                ConfigDocumentExporter(fileURL: exportURL)
-            }
-        }
         .sheet(isPresented: $isImporting) {
             ConfigDocumentImporter { url in
                 handleRestoreFile(url)
@@ -438,20 +446,39 @@ struct CosConfigView: View {
         return "\(safeBucket)_\(safeRegion)_\(df.string(from: Date())).json"
     }
 
-    /// 备份：生成 JSON 文件（临时目录）→ 弹出系统文件导出器，保存位置由用户自由选择
+    /// 备份：生成 JSON 文件并直接写入「备份」子文件夹（Documents/备份/<桶名_地域_日期.json>），
+    /// v1.35：不再弹出文件导出器（避免 iOS 上偶发空白面板）；备份文件随整个「备份」文件夹一起备份
     private func prepareBackupFile() {
         guard let json = CosConfigBackup.exportJSON() else {
             savedTip = "当前没有完整配置可备份，请先填写存储桶 / 地域 / SecretId / SecretKey 并保存"
             return
         }
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent(backupFileName)
+        let target = DataRoot.url().appendingPathComponent(backupFileName)
         do {
-            try json.data(using: .utf8)?.write(to: tmp)
-            exportURL = tmp
-            isExporting = true
+            try json.data(using: .utf8)?.write(to: target, options: .atomic)
+            savedTip = "配置备份成功 ✅\n文件已生成到：文件 App → 我的 iPhone → 房源管家 → 备份\n\(backupFileName)\n（随「备份」文件夹一起拷贝/共享即可留底）"
         } catch {
             savedTip = "生成备份文件失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// v1.35：访问储存桶——用当前填写的桶名/地域打开腾讯云 COS 控制台对应桶页面（默认浏览器）
+    private func openBucketConsole() {
+        let b = bucket.trimmingCharacters(in: .whitespacesAndNewlines)
+        let r = region.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !b.isEmpty, !r.isEmpty else {
+            savedTip = "请先填写存储桶名称和地域，再访问储存桶"
+            return
+        }
+        let urlString = "https://console.cloud.tencent.com/cos/bucket?bucket=\(b)&region=\(r)"
+        guard let url = URL(string: urlString) else {
+            savedTip = "无法打开储存桶，请检查桶名 / 地域是否填写正确"
+            return
+        }
+        UIApplication.shared.open(url) { ok in
+            if !ok {
+                savedTip = "无法打开浏览器，请手动访问腾讯云控制台"
+            }
         }
     }
 
@@ -503,18 +530,7 @@ struct CosConfigView: View {
     }
 }
 
-// MARK: - 文件选择器包装（v1.34：备份导出 / 恢复导入）
-
-/// 导出备份文件：把生成的 .json 导出到用户选择的位置（文件 App / iCloud / 微信等）
-struct ConfigDocumentExporter: UIViewControllerRepresentable {
-    let fileURL: URL
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        UIDocumentPickerViewController(forExporting: [fileURL], asCopy: true)
-    }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-}
+// MARK: - 文件选择器包装（v1.34：恢复导入；v1.35：备份改为直写「备份」文件夹，导出器已移除）
 
 /// 导入备份文件：用户从任意位置选择备份 .json 文件
 struct ConfigDocumentImporter: UIViewControllerRepresentable {
