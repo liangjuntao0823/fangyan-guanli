@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// 设置页（v1.22 重构：归拢成两个入口——远程配置 / 名片信息）
 /// 远程配置：腾讯云 COS 存储桶、密钥、自定义域名（用于分享房源卡片链接）
@@ -92,7 +93,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 当前 App 版本号（读自工程配置，如 1.30）
+    /// 当前 App 版本号（读自工程配置，如 1.34）
     private var appVersion: String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
     }
@@ -118,11 +119,10 @@ struct SettingsView: View {
 /// v1.20：保存改为「保存并验证连接」——写入钥匙串成功后立即用当前配置向 COS 上传一个测试文件
 /// 并回读，真实连通才算保存成功；任何环节失败都会给出具体错误码（桶不存在/签名错误/域名未生效），
 /// 不再静默提示「已保存」；同时密钥写入失败也会明确报出。
+// MARK: - COS 配置备份 / 恢复（v1.33 剪贴板版 → v1.34 文件版）
 
-// MARK: - COS 配置备份 / 恢复（v1.33）
-
-/// 把钥匙串里的 COS 配置导出为 JSON（复制到剪贴板由用户自行保管），
-/// 换机 / 重装 / 误改后可从剪贴板粘贴一键恢复。配置含密钥，备份文本请妥善保管。
+/// 把钥匙串里的 COS 配置导出为 JSON（v1.34 改为生成「桶名_地域_日期.json」文件由用户选择位置保存），
+/// 换机 / 重装 / 误改后可从备份文件一键恢复。配置含密钥，备份文件请妥善保管。
 enum CosConfigBackup {
     static func exportJSON() -> String? {
         guard let config = CosConfig.load() else { return nil }
@@ -138,19 +138,19 @@ enum CosConfigBackup {
         return json
     }
 
-    /// 从 JSON 文本恢复配置到钥匙串；返回 (是否成功, 提示)
+    /// 从备份文件内容恢复配置到钥匙串；返回 (是否成功, 提示)
     static func restore(fromJSON json: String) -> (Bool, String) {
         guard let data = json.data(using: .utf8) else {
-            return (false, "剪贴板内容不是有效的配置文本，请确认复制的是「备份配置」生成的 JSON")
+            return (false, "所选文件内容不是有效的配置文本，请确认选择的是「备份配置到文件」生成的 .json 文件")
         }
         let parsed: Any?
         do {
             parsed = try JSONSerialization.jsonObject(with: data)
         } catch {
-            return (false, "剪贴板内容不是有效的配置文本，请确认复制的是「备份配置」生成的 JSON")
+            return (false, "所选文件内容不是有效的配置文本，请确认选择的是「备份配置到文件」生成的 .json 文件")
         }
         guard let dict = parsed as? [String: Any] else {
-            return (false, "剪贴板内容不是有效的配置文本，请确认复制的是「备份配置」生成的 JSON")
+            return (false, "所选文件内容不是有效的配置文本，请确认选择的是「备份配置到文件」生成的 .json 文件")
         }
         let trimSet = CharacterSet.whitespacesAndNewlines
         let bucket = (dict["bucket"] as? String ?? "").trimmingCharacters(in: trimSet)
@@ -159,7 +159,7 @@ enum CosConfigBackup {
         let secretKey = (dict["secretKey"] as? String ?? "").trimmingCharacters(in: trimSet)
         let customDomain = (dict["customDomain"] as? String ?? "").trimmingCharacters(in: trimSet)
         if bucket.isEmpty || region.isEmpty || secretId.isEmpty || secretKey.isEmpty {
-            return (false, "配置缺少必填项（存储桶 / 地域 / SecretId / SecretKey），请检查备份文本")
+            return (false, "配置缺少必填项（存储桶 / 地域 / SecretId / SecretKey），请检查备份文件")
         }
         var allSaved = true
         let items: [(String, String)] = [
@@ -184,16 +184,22 @@ enum CosConfigBackup {
 
 struct CosConfigView: View {
     @State private var bucket = ""
-    @State private var region = "ap-hongkong"
+    @State private var region = ""
     @State private var secretId = ""
     @State private var secretKey = ""
     @State private var customDomain = ""
     @State private var savedTip: String?
     @State private var isVerifying = false
+    // v1.34：文件备份 / 恢复 + 清空配置
+    @State private var isExporting = false
+    @State private var exportURL: URL?
+    @State private var isImporting = false
+    @State private var confirmClear = false
 
     init() {
+        // v1.34：新装 App 默认配置全部为空，由用户自行填写（不再预填 ap-hongkong）
         let b = KeychainStore.load(KeychainKey.bucket) ?? ""
-        let r = KeychainStore.load(KeychainKey.region) ?? "ap-hongkong"
+        let r = KeychainStore.load(KeychainKey.region) ?? ""
         let i = KeychainStore.load(KeychainKey.secretId) ?? ""
         let k = KeychainStore.load(KeychainKey.secretKey) ?? ""
         let d = KeychainStore.load(KeychainKey.customDomain) ?? ""
@@ -247,23 +253,36 @@ struct CosConfigView: View {
                 Text("点击后 App 会用当前配置向云存储上传一个测试文件并回读，成功才提示「配置正确」；失败会直接告诉您具体原因。")
             }
 
-            // v1.33：备份 / 恢复配置（换机、重装、误改后一键恢复）
-            Section(header: Text("备份 / 恢复配置"), footer: Text("备份会把当前配置（含密钥）复制到剪贴板，请粘贴到备忘录或微信「文件传输助手」妥善保存；换机 / 重装 / 误改后，复制备份文本回来点「从剪贴板恢复配置」即可。含密钥内容请勿外泄。")) {
+            // v1.34：备份 / 恢复配置（文件方式）——备份生成「桶名_地域_日期.json」文件，
+            // 导出位置自由选择（文件 App / iCloud / 微信等）；恢复从任意位置选择备份文件导入
+            Section(header: Text("备份 / 恢复配置"), footer: Text("备份会生成一个「桶名_地域_日期.json」文件（含密钥），导出到您选择的位置（文件 App / 微信等）妥善保存；换机 / 重装 / 误改后，点「从备份文件恢复配置」选择该文件即可一键还原。含密钥内容请勿外泄。")) {
                 Button {
-                    backupCosConfig()
+                    prepareBackupFile()
                 } label: {
-                    Label("备份配置到剪贴板", systemImage: "square.and.arrow.up")
+                    Label("备份配置到文件", systemImage: "square.and.arrow.up")
                 }
                 Button {
-                    restoreCosConfig()
+                    isImporting = true
                 } label: {
-                    Label("从剪贴板恢复配置", systemImage: "square.and.arrow.down")
+                    Label("从备份文件恢复配置", systemImage: "square.and.arrow.down")
+                }
+                // v1.34：清空全部配置并断开与桶的连接
+                Button(role: .destructive) {
+                    confirmClear = true
+                } label: {
+                    Label("清空全部配置并断开连接", systemImage: "trash")
+                }
+                .alert("确认清空全部配置？", isPresented: $confirmClear) {
+                    Button("清空", role: .destructive) { clearAllConfig() }
+                    Button("取消", role: .cancel) {}
+                } message: {
+                    Text("将删除本机保存的存储桶、地域、密钥、自定义域名全部配置，并断开与 COS 的连接。此操作不可撤销，可先用「备份配置到文件」留底。")
                 }
             }
 
             // v1.28：开通步骤从设置主页面移入本页（仅首次配置需要）
             Section("开通步骤（简述）") {
-                Text("1. 打开 cloud.tencent.com 注册并实名认证；2. 开通「对象存储 COS」；3. 创建存储桶：名称建议 fangyuan88、地域选香港、访问权限选「私有读写」；4. 在「访问管理 CAM → API 密钥管理」新建密钥，得到 SecretId 和 SecretKey；5. 在「存储桶 → 域名与传输管理 → 自定义源站域名」绑定自己的域名（需先在腾讯云购买域名），并把域名填入远程配置的「自定义域名」栏——微信只认自定义域名，才能把链接抓成网页卡片。")
+                Text("1. 打开 cloud.tencent.com 注册并实名认证；2. 开通「对象存储 COS」；3. 创建存储桶：名称可自定义（如 fangyuan88）、地域按您实际选择的填写（如香港 ap-hongkong）、访问权限选「私有读写」；4. 在「访问管理 CAM → API 密钥管理」新建密钥，得到 SecretId 和 SecretKey；5. 在「存储桶 → 域名与传输管理 → 自定义源站域名」绑定自己的域名（需先在腾讯云购买域名），并把域名填入远程配置的「自定义域名」栏——微信只认自定义域名，才能把链接抓成网页卡片。注意：桶名和地域必须和您实际创建的存储桶一致，才能连接成功。")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                 Text("密钥与名片只存在本机钥匙串，不会上传到任何地方。")
@@ -273,6 +292,16 @@ struct CosConfigView: View {
         }
         .navigationTitle("远程配置")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $isExporting) {
+            if let exportURL {
+                ConfigDocumentExporter(fileURL: exportURL)
+            }
+        }
+        .sheet(isPresented: $isImporting) {
+            ConfigDocumentImporter { url in
+                handleRestoreFile(url)
+            }
+        }
         .alert("配置结果", isPresented: Binding(
             get: { savedTip != nil },
             set: { if !$0 { savedTip = nil } }
@@ -333,31 +362,115 @@ struct CosConfigView: View {
         }
     }
 
-    // MARK: - v1.33 备份 / 恢复配置
+    // MARK: - v1.34 备份 / 恢复配置（文件方式）
 
-    private func backupCosConfig() {
+    /// 生成备份文件名：桶名_地域_日期.json（如 fangyuan88-1511251056_ap-hongkong_20261021.json）
+    private var backupFileName: String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyyMMdd"
+        let safeBucket = bucket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "cos" : bucket.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeRegion = region.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "unknown" : region.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(safeBucket)_\(safeRegion)_\(df.string(from: Date())).json"
+    }
+
+    /// 备份：生成 JSON 文件（临时目录）→ 弹出系统文件导出器，保存位置由用户自由选择
+    private func prepareBackupFile() {
         guard let json = CosConfigBackup.exportJSON() else {
             savedTip = "当前没有完整配置可备份，请先填写存储桶 / 地域 / SecretId / SecretKey 并保存"
             return
         }
-        UIPasteboard.general.string = json
-        savedTip = "配置已复制到剪贴板（含密钥，请粘贴到备忘录 / 微信「文件传输助手」妥善保存，勿外泄）：\n\(json)"
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent(backupFileName)
+        do {
+            try json.data(using: .utf8)?.write(to: tmp)
+            exportURL = tmp
+            isExporting = true
+        } catch {
+            savedTip = "生成备份文件失败：\(error.localizedDescription)"
+        }
     }
 
-    private func restoreCosConfig() {
-        guard let text = UIPasteboard.general.string, !text.isEmpty else {
-            savedTip = "剪贴板为空。请先复制之前备份的配置文本，再点「从剪贴板恢复配置」"
+    /// 恢复：从用户选择的备份文件读取并还原配置
+    private func handleRestoreFile(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else {
+            savedTip = "无法读取所选文件，请确认选择的是「备份配置到文件」生成的 .json 文件"
             return
         }
         let result = CosConfigBackup.restore(fromJSON: text)
         savedTip = result.1
         if result.0 {
             // 恢复成功后刷新表单，用户可直接看到刚恢复的值
-            bucket = KeychainStore.load(KeychainKey.bucket) ?? ""
-            region = KeychainStore.load(KeychainKey.region) ?? ""
-            secretId = KeychainStore.load(KeychainKey.secretId) ?? ""
-            secretKey = KeychainStore.load(KeychainKey.secretKey) ?? ""
-            customDomain = KeychainStore.load(KeychainKey.customDomain) ?? ""
+            refreshFormFromKeychain()
+        }
+    }
+
+    /// 清空全部配置：删除钥匙串 5 项并清空表单
+    private func clearAllConfig() {
+        var allCleared = true
+        let keys = [
+            KeychainKey.bucket,
+            KeychainKey.region,
+            KeychainKey.secretId,
+            KeychainKey.secretKey,
+            KeychainKey.customDomain
+        ]
+        for key in keys {
+            if !KeychainStore.delete(key) {
+                allCleared = false
+            }
+        }
+        bucket = ""
+        region = ""
+        secretId = ""
+        secretKey = ""
+        customDomain = ""
+        savedTip = allCleared ? "已清空全部配置并断开与 COS 的连接 ✅" : "部分配置清除失败，请重启 App 后重试"
+    }
+
+    private func refreshFormFromKeychain() {
+        bucket = KeychainStore.load(KeychainKey.bucket) ?? ""
+        region = KeychainStore.load(KeychainKey.region) ?? ""
+        secretId = KeychainStore.load(KeychainKey.secretId) ?? ""
+        secretKey = KeychainStore.load(KeychainKey.secretKey) ?? ""
+        customDomain = KeychainStore.load(KeychainKey.customDomain) ?? ""
+    }
+}
+
+// MARK: - 文件选择器包装（v1.34：备份导出 / 恢复导入）
+
+/// 导出备份文件：把生成的 .json 导出到用户选择的位置（文件 App / iCloud / 微信等）
+struct ConfigDocumentExporter: UIViewControllerRepresentable {
+    let fileURL: URL
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        UIDocumentPickerViewController(forExporting: [fileURL], asCopy: true)
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+}
+
+/// 导入备份文件：用户从任意位置选择备份 .json 文件
+struct ConfigDocumentImporter: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.json])
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            onPick(url)
         }
     }
 }
