@@ -144,7 +144,8 @@ enum CosUploader {
     /// 这就解决了「改了网页设计但房源信息没变化、缓存命中还是旧链接」的问题。
     /// v1.27：名片板块改版（二维码 + 新底色）→ 2→3；且二维码是否存在也纳入缓存校验（qrcodeSet），
     /// 用户设置/清除二维码后旧缓存自动失效重新生成页面。
-    static let htmlTemplateVersion = 3
+    /// v1.28：二维码下方新增「长按二维码加我好友」小字提示 → 3→4
+    static let htmlTemplateVersion = 4
 
     enum CosError: LocalizedError {
         case invalidConfig
@@ -495,6 +496,12 @@ enum CosUploader {
 
     // MARK: - HTML 模板（v1.21 设计稿定稿：脱敏版）
 
+    /// v1.28：二维码列（二维码 + 下方小字「长按二维码加我好友」），无二维码时返回空串（该行不显示）
+    private static func qrColumnHTML(qrSrc: String) -> String {
+        guard !qrSrc.isEmpty else { return "" }
+        return "<div class=\"qr-col\"><img class=\"qr\" src=\"\(qrSrc)\" alt=\"微信二维码\"><div class=\"qr-tip\">长按二维码加我好友</div></div>"
+    }
+
     /// 脱敏版（隐藏版）：户型大字 → 位置+导航 → 实拍（视频置顶、图片单列）→ 名片 → 底栏
     /// 无房号/价格/房东/密码/备注；图片用 CSS 背景图渲染（微信长按背景图无「保存图片」），全局禁右键/禁长按选择
     /// v1.27：名片板块换浅蓝底色；微信二维码（真实 <img>，可长按被微信识别）放左侧，原居中信息右移
@@ -503,7 +510,7 @@ enum CosUploader {
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
         let urlMeta = shareLink.isEmpty ? "" : "<meta property=\"og:url\" content=\"\(shareLink)\">"
         let galleryJS = imageURLs.map { "'\($0)'" }.joined(separator: ",")
-        let qrImg = qrSrc.isEmpty ? "" : "<img class=\"qr\" src=\"\(qrSrc)\" alt=\"微信二维码\">"
+        let qrCol = qrColumnHTML(qrSrc: qrSrc)
         let qrWrapClass = qrSrc.isEmpty ? " qr-wrap center" : " qr-wrap"
         return """
         <!DOCTYPE html>
@@ -537,6 +544,8 @@ enum CosUploader {
         .card{background:linear-gradient(180deg,#f7fafd,#e9f1f9);border:1px solid #dfe9f3;border-radius:16px;padding:14px;margin-top:12px;}
         .qr-wrap{display:flex;align-items:center;gap:14px;}
         .qr-wrap.center{justify-content:center;}
+        .qr-col{display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0;}
+        .qr-tip{font-size:10px;color:#8e8e93;text-align:center;max-width:108px;white-space:nowrap;line-height:1.3;}
         .qr{width:108px;height:108px;border-radius:10px;object-fit:cover;flex-shrink:0;background:#fff;border:1px solid #e3e3e8;-webkit-touch-callout:default;-webkit-user-select:text;user-select:text;-webkit-user-drag:auto;}
         .card-info{flex:1;min-width:0;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
@@ -571,7 +580,7 @@ enum CosUploader {
         \(mediaBlock)
         <section class="card">
           <div class="\(qrWrapClass)">
-            \(qrImg)
+            \(qrCol)
             <div class="card-info">
               <div class="tag">米兰租赁管家 · 专业省心租好房</div>
               <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
@@ -613,7 +622,7 @@ enum CosUploader {
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
         let urlMeta = shareLink.isEmpty ? "" : "<meta property=\"og:url\" content=\"\(shareLink)\">"
         let galleryJS = imageURLs.map { "'\($0)'" }.joined(separator: ",")
-        let qrImg = qrSrc.isEmpty ? "" : "<img class=\"qr\" src=\"\(qrSrc)\" alt=\"微信二维码\">"
+        let qrCol = qrColumnHTML(qrSrc: qrSrc)
         let qrWrapClass = qrSrc.isEmpty ? " qr-wrap center" : " qr-wrap"
 
         let host = info.landlord.isEmpty ? "" : "<span class=\"host\">\(escapeHTML(info.landlord))</span>"
@@ -656,6 +665,8 @@ enum CosUploader {
         .card{background:linear-gradient(180deg,#f7fafd,#e9f1f9);border:1px solid #dfe9f3;border-radius:16px;padding:14px;margin-top:12px;}
         .qr-wrap{display:flex;align-items:center;gap:14px;}
         .qr-wrap.center{justify-content:center;}
+        .qr-col{display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0;}
+        .qr-tip{font-size:10px;color:#8e8e93;text-align:center;max-width:108px;white-space:nowrap;line-height:1.3;}
         .qr{width:108px;height:108px;border-radius:10px;object-fit:cover;flex-shrink:0;background:#fff;border:1px solid #e3e3e8;-webkit-touch-callout:default;-webkit-user-select:text;user-select:text;-webkit-user-drag:auto;}
         .card-info{flex:1;min-width:0;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
@@ -688,7 +699,7 @@ enum CosUploader {
         \(mediaBlock)
         <section class="card">
           <div class="\(qrWrapClass)">
-            \(qrImg)
+            \(qrCol)
             <div class="card-info">
               <div class="tag">米兰租赁管家 · 专业省心租好房</div>
               <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
@@ -734,7 +745,7 @@ enum CosUploader {
 
     private static func buildCollectionHTML(rooms: [PreparedRoom], mode: ShareMode, name: String, phone: String, coverSrc: String, qrSrc: String) -> String {
         let count = rooms.count
-        let qrImg = qrSrc.isEmpty ? "" : "<img class=\"qr\" src=\"\(qrSrc)\" alt=\"微信二维码\">"
+        let qrCol = qrColumnHTML(qrSrc: qrSrc)
         let qrWrapClass = qrSrc.isEmpty ? " qr-wrap center" : " qr-wrap"
         // og
         let title: String
@@ -845,6 +856,8 @@ enum CosUploader {
         .card{background:linear-gradient(180deg,#f7fafd,#e9f1f9);border:1px solid #dfe9f3;border-radius:16px;padding:14px;margin-top:12px;}
         .qr-wrap{display:flex;align-items:center;gap:14px;}
         .qr-wrap.center{justify-content:center;}
+        .qr-col{display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0;}
+        .qr-tip{font-size:10px;color:#8e8e93;text-align:center;max-width:108px;white-space:nowrap;line-height:1.3;}
         .qr{width:108px;height:108px;border-radius:10px;object-fit:cover;flex-shrink:0;background:#fff;border:1px solid #e3e3e8;-webkit-touch-callout:default;-webkit-user-select:text;user-select:text;-webkit-user-drag:auto;}
         .card-info{flex:1;min-width:0;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
@@ -880,7 +893,7 @@ enum CosUploader {
           <!-- v1.27：名片板块换浅蓝底色 + 微信二维码（真实 img，可长按被微信识别）放左侧，信息右移 -->
           <section class="card">
             <div class="\(qrWrapClass)">
-              \(qrImg)
+              \(qrCol)
               <div class="card-info">
                 <div class="tag">米兰租赁管家 · 专业省心租好房</div>
                 <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
@@ -927,7 +940,7 @@ enum CosUploader {
     /// v1.27：详情名片同样带微信二维码（真实 <img>，可长按识别）+ 浅蓝底色
     private static func collectionDetailHTML(item: ShareCollectionItem, mode: ShareMode, videoTags: [String], imageURLs: [String], startIndex: Int, name: String, phone: String, qrSrc: String) -> String {
         var parts: [String] = []
-        let qrImg = qrSrc.isEmpty ? "" : "<img class=\"qr\" src=\"\(qrSrc)\" alt=\"微信二维码\">"
+        let qrCol = qrColumnHTML(qrSrc: qrSrc)
         let qrWrapClass = qrSrc.isEmpty ? " qr-wrap center" : " qr-wrap"
         parts.append("<div class=\"dhero\">")
         if mode == .masked {
@@ -961,7 +974,7 @@ enum CosUploader {
         parts.append("""
         <section class="card">
           <div class="\(qrWrapClass)">
-            \(qrImg)
+            \(qrCol)
             <div class="card-info">
               <div class="tag">米兰租赁管家 · 专业省心租好房</div>
               <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
