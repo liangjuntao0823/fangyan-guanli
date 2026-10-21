@@ -153,8 +153,13 @@ struct HouseListView: View {
         }
     }
 
-    // v1.30：统计栏恒显示「1座 / 2座 / 待租」总统计，不再被默认筛选顶替（此前默认筛「待租」后
-    // 统计栏只剩「待租 N 套」，1座/2座总数沉下去了）；筛选/搜索时右侧追加「筛出 N 套」作为补充。
+    // MARK: - 统计（动态跟随当前筛选；v1.31：恢复 v1.29 显示方式 + 修复统计栏下沉）
+    // 规则：
+    //  - 筛选了座号 / 户型 → 显示筛选口径数量（如「1座 X套」「1座 单间上层 X套」，状态为隐含条件不拼入）
+    //  - 仅筛选状态（含默认待租）→ 显示「待租 X套 + 1座 X套 + 2座 X套」：状态在前、该状态下的座号分布跟上，
+    //    1座/2座不再被默认「待租」筛选顶替掉（统计栏不下沉）
+    //  - 无任何筛选 → 显示「1座 X套 2座 X套 待租 X套」
+
     private var statsBar: some View {
         HStack(spacing: 12) {
             // v1.28：版本号徽章已移除，改到「设置」页最底部显示
@@ -171,25 +176,44 @@ struct HouseListView: View {
 
             Spacer()
 
-            Text("1座 \(tower1Count) 套")
-                .font(.footnote.weight(.semibold))
-                .foregroundColor(AppTheme.primary)
-            Text("2座 \(tower2Count) 套")
-                .font(.footnote.weight(.semibold))
-                .foregroundColor(AppTheme.primary)
-            Text("待租 \(availableCount) 套")
-                .font(.footnote.weight(.semibold))
-                .foregroundColor(AppTheme.primary)
-
-            if towerFilter != nil || statusFilter != nil || layoutFilter != nil || !searchText.isEmpty {
-                Text("筛出 \(filteredHouses.count) 套")
+            if towerFilter != nil || layoutFilter != nil {
+                Text(statsFilteredLabel)
                     .font(.footnote.weight(.semibold))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(AppTheme.primary)
+                    .lineLimit(1)
+            } else if let status = statusFilter {
+                Text("\(status.label) \(filteredHouses.count) 套")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+                Text("1座 \(filteredHouses.filter { $0.tower == 1 }.count) 套")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+                Text("2座 \(filteredHouses.filter { $0.tower == 2 }.count) 套")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+            } else {
+                Text("1座 \(tower1Count) 套")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+                Text("2座 \(tower2Count) 套")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
+                Text("待租 \(availableCount) 套")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(AppTheme.primary)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color.white)
+    }
+
+    private var statsFilteredLabel: String {
+        var parts: [String] = []
+        if let t = towerFilter { parts.append("\(t)座") }
+        if let l = layoutFilter { parts.append(l) }
+        parts.append("\(filteredHouses.count)套")
+        return parts.joined(separator: " ")
     }
 
     // MARK: - 搜索
