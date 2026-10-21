@@ -259,6 +259,19 @@ struct HouseEditView: View {
             return
         }
 
+        // v1.30：登记查重——以房号为唯一标准（同一座、同一房号视为同一套，禁止重复收录）。
+        // 编辑房源时若座号/房号都没变，不查（避免把自己误判为重复）；新增必查。
+        let allHouses = (try? modelContext.fetch(FetchDescriptor<House>())) ?? []
+        let duplicate = allHouses.first { other in
+            let isSelf = house.map { other.id == $0.id } ?? false
+            return !isSelf && other.tower == tower && other.roomNo == cleanRoomNo
+        }
+        if let duplicate {
+            errorMessage = "这套房源已收录过：\(duplicate.tower == 2 ? "2-" : "")\(duplicate.roomNo)（\(duplicate.layout.isEmpty ? "户型未填" : duplicate.layout)，\(duplicate.status.label)）\n同一座同一房号不能重复添加"
+            showError = true
+            return
+        }
+
         let target: House
         if let house {
             target = house
