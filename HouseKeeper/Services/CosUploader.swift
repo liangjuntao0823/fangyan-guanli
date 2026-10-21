@@ -96,7 +96,7 @@ enum ShareMode: String {
 
 // MARK: - 名片微信二维码（v1.27）
 
-/// 微信二维码存储：设置页「名片信息」上传保存为 Documents/qrcode.png。
+/// 微信二维码存储：设置页「名片信息」上传保存为 Documents/备份/qrcode.png（v1.30 随数据一起进「备份」子文件夹）。
 /// 分享时若已设置二维码，统一压缩后上传 COS 固定路径 h/_qrcode/qr.jpg（覆盖写），
 /// 所有 H5 名片板块用该固定路径的签名 URL 引用——二维码更换后，
 /// 之前已发出的分享链接会自动显示新二维码（路径不变，读取的是当前对象内容），无需重新分享。
@@ -104,7 +104,7 @@ enum QrcodeStore {
     static let fileName = "qrcode.png"
 
     static var fileURL: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(fileName)
+        DataRoot.url().appendingPathComponent(fileName)
     }
 
     @discardableResult
