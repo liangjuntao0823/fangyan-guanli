@@ -52,12 +52,18 @@ struct HouseEditView: View {
                             }
                     }
 
-                    Picker("座号", selection: $tower) {
-                        Text("1座").tag(1)
-                        Text("2座").tag(2)
-                    }
-                    .onChange(of: tower) {
-                        towerTouched = true
+                    HStack {
+                        Text("座号")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        Picker("座号", selection: $tower) {
+                            Text("1座").tag(1)
+                            Text("2座").tag(2)
+                        }
+                        .labelsHidden()
+                        .onChange(of: tower) {
+                            towerTouched = true
+                        }
                     }
 
                     HStack {
@@ -93,6 +99,15 @@ struct HouseEditView: View {
                             .foregroundColor(.secondary)
                             .frame(width: 64, alignment: .leading)
                         TextField("进门密码", text: $password)
+                    }
+
+                    // v1.23：备注行移入「基本信息」板块，放在密码下方（与上下输入框对齐）
+                    HStack(alignment: .top) {
+                        Text("备注")
+                            .foregroundColor(.secondary)
+                            .frame(width: 64, alignment: .leading)
+                        TextField("如 采光好 / 带阳台 / 近电梯", text: $remark, axis: .vertical)
+                            .lineLimit(1...4)
                     }
                 }
 
@@ -172,16 +187,6 @@ struct HouseEditView: View {
                 } footer: {
                     Text("照片和视频保存在本机，分享时随房源信息一起发送。")
                 }
-
-                Section("备注") {
-                    HStack(alignment: .top) {
-                        Text("备注")
-                            .foregroundColor(.secondary)
-                            .frame(width: 64, alignment: .leading)
-                        TextField("如 采光好 / 带阳台 / 近电梯", text: $remark, axis: .vertical)
-                            .lineLimit(1...4)
-                    }
-                }
             }
             .navigationTitle(isEditing ? "编辑房源" : "登记房源")
             .navigationBarTitleDisplayMode(.inline)
@@ -202,7 +207,10 @@ struct HouseEditView: View {
                 guard !newValue.isEmpty else { return }
                 Task { await loadVideos(from: newValue) }
             }
-            .alert("无法保存", isPresented: $showError) {
+            .alert("无法保存", isPresented: Binding(
+                get: { showError },
+                set: { showError = $0 }
+            )) {
                 Button("好", role: .cancel) {}
             } message: {
                 Text(errorMessage)
