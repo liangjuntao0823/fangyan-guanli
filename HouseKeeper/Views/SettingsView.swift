@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 /// 设置页（v1.22 重构：归拢成两个入口——远程配置 / 名片信息）
 /// 远程配置：腾讯云 COS 存储桶、密钥、自定义域名（用于分享房源卡片链接）
@@ -117,6 +118,62 @@ struct SettingsView: View {
 /// v1.20：保存改为「保存并验证连接」——写入钥匙串成功后立即用当前配置向 COS 上传一个测试文件
 /// 并回读，真实连通才算保存成功；任何环节失败都会给出具体错误码（桶不存在/签名错误/域名未生效），
 /// 不再静默提示「已保存」；同时密钥写入失败也会明确报出。
+
+// MARK: - COS 配置备份 / 恢复（v1.33）
+
+/// 把钥匙串里的 COS 配置导出为 JSON（复制到剪贴板由用户自行保管），
+/// 换机 / 重装 / 误改后可从剪贴板粘贴一键恢复。配置含密钥，备份文本请妥善保管。
+enum CosConfigBackup {
+    static func exportJSON() -> String? {
+        guard let config = CosConfig.load() else { return nil }
+        let dict: [String: String] = [
+            "bucket": config.bucket,
+            "region": config.region,
+            "secretId": config.secretId,
+            "secretKey": config.secretKey,
+            "customDomain": config.customDomain
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        return json
+    }
+
+    /// 从 JSON 文本恢复配置到钥匙串；返回 (是否成功, 提示)
+    static func restore(fromJSON json: String) -> (ok: Bool, message: String) {
+        guard let data = json.data(using: .utf8),
+              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return (false, "剪贴板内容不是有效的配置文本，请确认复制的是「备份配置」生成的 JSON")
+        }
+        let trimSet = CharacterSet.whitespacesAndNewlines
+        func str(_ key: String) -> String {
+            (dict[key] as? String ?? "").trimmingCharacters(in: trimSet)
+        }
+        let bucket = str("bucket")
+        let region = str("region")
+        let secretId = str("secretId")
+        let secretKey = str("secretKey")
+        let customDomain = str("customDomain")
+        guard !bucket.isEmpty, !region.isEmpty, !secretId.isEmpty, !secretKey.isEmpty else {
+            return (false, "配置缺少必填项（存储桶 / 地域 / SecretId / SecretKey），请检查备份文本")
+        }
+        var allSaved = true
+        let items: [(String, String)] = [
+            (KeychainKey.bucket, bucket),
+            (KeychainKey.region, region),
+            (KeychainKey.secretId, secretId),
+            (KeychainKey.secretKey, secretKey),
+            (KeychainKey.customDomain, customDomain)
+        ]
+        for (key, value) in items {
+            if !KeychainStore.save(value, for: key) { allSaved = false }
+        }
+        if !allSaved {
+            return (false, "写入本机钥匙串失败，请重试；若仍失败请重启 App 后再试")
+        }
+        return (true, "配置已恢复：地域 \(region) / 存储桶 \(bucket)\n表单已刷新，可点「保存并验证连接」确认可用")
+    }
+}
+
 struct CosConfigView: View {
     @State private var bucket = ""
     @State private var region = "ap-hongkong"
@@ -182,6 +239,22 @@ struct CosConfigView: View {
                 Text("点击后 App 会用当前配置向云存储上传一个测试文件并回读，成功才提示「配置正确」；失败会直接告诉您具体原因。")
             }
 
+            // v1.33：备份 / 恢复配置（换机、重装、误改后一键恢复）
+            Section("备份 / 恢复配置") {
+                Button {
+                    backupCosConfig()
+                } label: {
+                    Label("备份配置到剪贴板", systemImage: "square.and.arrow.up")
+                }
+                Button {
+                    restoreCosConfig()
+                } label: {
+                    Label("从剪贴板恢复配置", systemImage: "square.and.arrow.down")
+                }
+            } footer: {
+                Text("备份会把当前配置（含密钥）复制到剪贴板，请粘贴到备忘录或微信「文件传输助手」妥善保存；换机 / 重装 / 误改后，复制备份文本回来点「从剪贴板恢复配置」即可。含密钥内容请勿外泄。")
+            }
+
             // v1.28：开通步骤从设置主页面移入本页（仅首次配置需要）
             Section("开通步骤（简述）") {
                 Text("1. 打开 cloud.tencent.com 注册并实名认证；2. 开通「对象存储 COS」；3. 创建存储桶：名称建议 fangyuan88、地域选香港、访问权限选「私有读写」；4. 在「访问管理 CAM → API 密钥管理」新建密钥，得到 SecretId 和 SecretKey；5. 在「存储桶 → 域名与传输管理 → 自定义源站域名」绑定自己的域名（需先在腾讯云购买域名），并把域名填入远程配置的「自定义域名」栏——微信只认自定义域名，才能把链接抓成网页卡片。")
@@ -205,6 +278,14 @@ struct CosConfigView: View {
     }
 
     private func saveAndVerify() {
+        // 0. 统一去除首尾空格（粘贴带入空白会导致签名失败或地域识别异常）
+        let trimSet = CharacterSet.whitespacesAndNewlines
+        bucket = bucket.trimmingCharacters(in: trimSet)
+        region = region.trimmingCharacters(in: trimSet)
+        secretId = secretId.trimmingCharacters(in: trimSet)
+        secretKey = secretKey.trimmingCharacters(in: trimSet)
+        customDomain = customDomain.trimmingCharacters(in: trimSet)
+
         // 1. 写入钥匙串：任一项写失败都要明确提示（v1.20 之前写入失败被静默吞掉）
         var allSaved = true
         let items: [(String, String)] = [
@@ -224,17 +305,53 @@ struct CosConfigView: View {
             return
         }
 
+        // 1.5 回读自检（v1.33）：保存后立即从钥匙串读回比对，防止「保存成功但重启后是旧值」
+        let savedBucket = KeychainStore.load(KeychainKey.bucket) ?? ""
+        let savedRegion = KeychainStore.load(KeychainKey.region) ?? ""
+        if savedRegion != region || savedBucket != bucket {
+            savedTip = "写入自检失败：钥匙串中地域为「\(savedRegion)」、存储桶为「\(savedBucket)」，与本次填写不一致。请重启 App 后重新保存"
+            return
+        }
+
         // 2. 后台真实验证：上传测试文件 + 回读（失败会带具体错误码）
         isVerifying = true
         let config = CosConfig(bucket: bucket, region: region, secretId: secretId, secretKey: secretKey, customDomain: customDomain)
         Task {
             do {
                 let hostUsed = try await CosUploader.verifyConnection(config: config)
-                savedTip = "配置正确：云存储连接成功 ✅\n实际使用域名：\(hostUsed)\n现在可以去详情页「分享」生成卡片链接"
+                savedTip = "配置正确：云存储连接成功 ✅\n已保存地域：\(region)\n实际使用域名：\(hostUsed)\n现在可以去详情页「分享」生成卡片链接"
             } catch {
                 savedTip = "验证失败：\(error.localizedDescription)"
             }
             isVerifying = false
+        }
+    }
+
+    // MARK: - v1.33 备份 / 恢复配置
+
+    private func backupCosConfig() {
+        guard let json = CosConfigBackup.exportJSON() else {
+            savedTip = "当前没有完整配置可备份，请先填写存储桶 / 地域 / SecretId / SecretKey 并保存"
+            return
+        }
+        UIPasteboard.general.string = json
+        savedTip = "配置已复制到剪贴板（含密钥，请粘贴到备忘录 / 微信「文件传输助手」妥善保存，勿外泄）：\n\(json)"
+    }
+
+    private func restoreCosConfig() {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else {
+            savedTip = "剪贴板为空。请先复制之前备份的配置文本，再点「从剪贴板恢复配置」"
+            return
+        }
+        let result = CosConfigBackup.restore(fromJSON: text)
+        savedTip = result.message
+        if result.ok {
+            // 恢复成功后刷新表单，用户可直接看到刚恢复的值
+            bucket = KeychainStore.load(KeychainKey.bucket) ?? ""
+            region = KeychainStore.load(KeychainKey.region) ?? ""
+            secretId = KeychainStore.load(KeychainKey.secretId) ?? ""
+            secretKey = KeychainStore.load(KeychainKey.secretKey) ?? ""
+            customDomain = KeychainStore.load(KeychainKey.customDomain) ?? ""
         }
     }
 }
