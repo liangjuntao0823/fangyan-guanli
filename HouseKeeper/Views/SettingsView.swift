@@ -48,8 +48,8 @@ struct SettingsView: View {
                 Text("平时无需操作：App 更新页面设计后，旧缓存会自动失效、分享自动生成新页面。仅当您想立刻重置全部缓存（例如改了页面样式想马上生效）时才需要点这里。")
             }
 
-            // v1.29：数据备份——微信式文件夹备份：全部数据集中在 Documents（housekeeper.store + Media/），
-            // 备份 = 在「文件」App 把整个「房源管家」文件夹复制走；恢复 = 重装后把文件夹内容放回原位
+            // v1.30：数据备份——全部数据默认存放在「备份」子文件夹（数据库 + Media + 二维码 + 分享缓存），
+            // 根目录保持整洁；复制「备份」子文件夹 = 备份，放回 = 恢复（微信式文件夹备份）
             Section {
                 HStack {
                     Label("数据文件夹大小", systemImage: "externaldrive")
@@ -65,7 +65,7 @@ struct SettingsView: View {
                     Label("打开「文件」App 查看数据文件夹", systemImage: "folder")
                 }
             } footer: {
-                Text("备份：在「文件」App → 我的 iPhone → 房源管家，把整个文件夹（含 housekeeper.store 与 Media）复制到电脑/网盘/微信。恢复：重装 App 后把文件夹内容放回原位，房源信息和图片视频全部还原。")
+                Text("本 App 的全部数据（房源数据库、图片视频、二维码）默认存放在「房源管家」文件夹内的「备份」子文件夹。备份：长按「备份」文件夹 → 拷贝/共享到电脑、网盘或微信；恢复：重装后把「备份」文件夹放回原位即可，房源信息和图片视频全部还原。")
             }
 
             // v1.28：版本号移到设置页最底部（原首页左上角版本徽章已移除）
@@ -91,16 +91,15 @@ struct SettingsView: View {
         }
     }
 
-    /// 当前 App 版本号（读自工程配置，如 1.29）
+    /// 当前 App 版本号（读自工程配置，如 1.30）
     private var appVersion: String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
     }
 
-    /// v1.29：Documents 目录总大小（含 Media/、数据库、二维码、分享缓存等）
+    /// v1.30：「备份」子文件夹总大小（数据库、Media/、二维码、分享缓存等都在这里）
     private static func documentsSizeText() -> String {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         var total: Int64 = 0
-        if let enumerator = FileManager.default.enumerator(at: docs, includingPropertiesForKeys: [.fileSizeKey]) {
+        if let enumerator = FileManager.default.enumerator(at: DataRoot.url(), includingPropertiesForKeys: [.fileSizeKey]) {
             for case let url as URL in enumerator {
                 if let values = try? url.resourceValues(forKeys: [.fileSizeKey]), let size = values.fileSize {
                     total += Int64(size)
@@ -247,7 +246,7 @@ struct CosConfigView: View {
 /// （分享缓存里存了名片，名片一变缓存自动失效，无需手动清缓存）。
 /// v1.26：①新增实时名片预览；②说明应用范围覆盖所有出现姓名/电话的位置
 /// （H5 名片区、微信卡片描述、页面底栏电话、拨打电话/复制电话）。
-/// v1.27：新增「微信二维码」入口——从相册选择二维码图片保存（Documents/qrcode.png），
+/// v1.27：新增「微信二维码」入口——从相册选择二维码图片保存（Documents/备份/qrcode.png），
 /// 分享时自动上传 COS 并显示在所有 H5 名片板块左侧，访客长按可直接被微信识别。
 struct ShareProfileView: View {
     @State private var shareName = ""
