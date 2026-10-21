@@ -105,7 +105,7 @@ enum CosUploader {
     /// mediaBlockHTML 等）后必须 +1——缓存校验会比对模板版本，版本变了旧缓存自动失效，
     /// 下次分享自动重新生成并上传新页面，无需任何手动操作。
     /// 这就解决了「改了网页设计但房源信息没变化、缓存命中还是旧链接」的问题。
-    static let htmlTemplateVersion = 1
+    static let htmlTemplateVersion = 2
 
     enum CosError: LocalizedError {
         case invalidConfig
@@ -510,7 +510,7 @@ enum CosUploader {
             <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
           </div>
         </section>
-        <div class="foot">更多优质房源请与我联系-13288251132</div>
+        <div class="foot">更多优质房源请与我联系-\(escapeHTML(phone))</div>
         </div>
         <div id="toast"></div>
         <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
@@ -616,7 +616,7 @@ enum CosUploader {
             <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
           </div>
         </section>
-        <div class="foot">更多优质房源请与我联系-13288251132</div>
+        <div class="foot">更多优质房源请与我联系-\(escapeHTML(phone))</div>
         </div>
         <div id="toast"></div>
         <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
@@ -696,7 +696,7 @@ enum CosUploader {
             </div>
             """)
 
-            let detail = collectionDetailHTML(item: room.item, mode: mode, videoTags: room.videoTags, imageURLs: room.imageURLs, startIndex: cursor)
+            let detail = collectionDetailHTML(item: room.item, mode: mode, videoTags: room.videoTags, imageURLs: room.imageURLs, startIndex: cursor, name: name, phone: phone)
             cursor += room.imageURLs.count
             gallery.append(contentsOf: room.imageURLs)
             // JS 单引号字符串转义：反斜杠 → \\ 、单引号 → \' 、换行 → \n（JS 字符串字面量不允许未转义换行）
@@ -786,7 +786,17 @@ enum CosUploader {
           <div class="items">
         \(itemsHTML)
           </div>
-          <div class="foot">更多优质房源请与我联系-13288251132</div>
+          <!-- v1.26：合集列表页底部也加名片（拨打电话/复制电话），与单套分享页一致 -->
+          <section class="card">
+            <div class="tag">米兰租赁管家 · 专业省心租好房</div>
+            <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
+            <div class="note">微信同号 · 24小时可约看房</div>
+            <div class="btns">
+              <a class="btn call" href="tel:\(escapeHTML(phone))">拨打电话</a>
+              <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
+            </div>
+          </section>
+          <div class="foot">更多优质房源请与我联系-\(escapeHTML(phone))</div>
         </div>
         <div id="detailView" style="display:none">
           <button class="back" type="button" onclick="showList()">‹ 返回房源列表</button>
@@ -817,7 +827,8 @@ enum CosUploader {
     }
 
     /// 合集单套详情 HTML：脱敏=户型+导航；完整=房号+户型 / 价格+密码+房东 / 备注。媒体：视频置顶、图片单列。
-    private static func collectionDetailHTML(item: ShareCollectionItem, mode: ShareMode, videoTags: [String], imageURLs: [String], startIndex: Int) -> String {
+    /// v1.26：详情底部也加名片（拨打电话/复制电话），与单套分享页一致
+    private static func collectionDetailHTML(item: ShareCollectionItem, mode: ShareMode, videoTags: [String], imageURLs: [String], startIndex: Int, name: String, phone: String) -> String {
         var parts: [String] = []
         parts.append("<div class=\"dhero\">")
         if mode == .masked {
@@ -847,6 +858,18 @@ enum CosUploader {
         }
         media += "</div>"
         parts.append(media)
+        // v1.26：详情页底部名片（与单套分享页一致），名字电话来自设置页
+        parts.append("""
+        <section class="card">
+          <div class="tag">米兰租赁管家 · 专业省心租好房</div>
+          <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
+          <div class="note">微信同号 · 24小时可约看房</div>
+          <div class="btns">
+            <a class="btn call" href="tel:\(escapeHTML(phone))">拨打电话</a>
+            <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
+          </div>
+        </section>
+        """)
         return parts.joined(separator: "")
     }
 
@@ -864,12 +887,17 @@ enum CosUploader {
     }
 
     /// 户型标题：户型 + 房号中的上下层后缀（如「单间 · 上层」）；无后缀只显示户型
-    /// v1.22：户型本身已含「上/下」后缀（如「单间下层」）时不再重复拼接，避免「单间下层 · 下」
+    /// v1.26：户型本身已含「上/下」楼层词（如「单间下层」「独立厨房下层」）时不再拼接后缀，
+    /// 彻底避免「独立厨房下层 · 下」这类重复；仅当户型完全不含上下层信息时才补后缀
     private static func layoutTitle(_ layout: String, roomNo: String) -> String {
         let suffix = roomNo.filter { !$0.isNumber && $0 != "-" && $0 != " " && $0 != "." && $0 != "/" }
         var title = layout.isEmpty ? "房源" : layout
-        if !suffix.isEmpty, !title.contains(suffix) {
-            title += " · " + suffix
+        if !suffix.isEmpty {
+            // 户型里已带上下层字样（上/下）→ 后缀信息已包含在户型内，不再拼接
+            let hasFloorWord = title.contains("上") || title.contains("下")
+            if !hasFloorWord, !title.hasSuffix(suffix) {
+                title += " · " + suffix
+            }
         }
         return title
     }
