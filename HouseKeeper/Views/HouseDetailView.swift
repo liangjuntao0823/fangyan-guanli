@@ -421,7 +421,8 @@ struct HouseDetailView: View {
     }
 
     private func deleteHouse() {
-        MediaStore.deleteAll(files: house.mediaItems.map(\.fileName), roomKey: house.mediaRoomKey)
+        // v1.35：同步删除本地全部文件（整个房号目录 + 分享缓存），磁盘不留残留
+        MediaStore.deleteHouseDirectory(roomKey: house.mediaRoomKey)
         modelContext.delete(house)
         try? modelContext.save()
         dismiss()
