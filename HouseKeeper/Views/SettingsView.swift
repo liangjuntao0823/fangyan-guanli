@@ -2,6 +2,71 @@ import SwiftUI
 import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
+import Security
+
+// MARK: - v1.34 钥匙串写入修复（独立实现，避免改动 CosUploader.swift 整文件）
+
+/// 旧 KeychainStore.save 的 bug：SecItemDelete 的查询字典里带了 kSecValueData（要写入的新值），
+/// 而删除匹配按查询属性匹配——旧条目存的是旧数据，与新值不匹配 → 删不掉旧条目；
+/// 随后 SecItemAdd 因同 account 条目已存在返回 errSecDuplicateItem 被当作成功 → 返回 true 但钥匙串仍是旧值
+/// （表现为「保存成功退出再进又变回旧地域」，自检时读到 ap-guangzhou 旧值）。
+/// 新实现：存在则 SecItemUpdate 更新、不存在则 SecItemAdd 添加，并立即回读比对，值一致才返回 true。
+enum KeychainFix {
+    private static let service = "com.zfgj.housekeeper"
+
+    @discardableResult
+    static func saveVerified(_ value: String, for key: String) -> Bool {
+        let data = Data(value.utf8)
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        // 已存在 → 更新（保留 kSecAttrAccessible 属性不被覆盖）
+        let update: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+        let updateStatus = SecItemUpdate(base as CFDictionary, update as CFDictionary)
+        if updateStatus == errSecSuccess {
+            return load(key) == value   // 回读验证：值一致才算成功
+        }
+        if updateStatus != errSecItemNotFound {
+            return false   // 权限等错误，明确失败
+        }
+        // 不存在 → 新增
+        var add = base
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else { return false }
+        return load(key) == value   // 回读验证
+    }
+
+    /// 删除指定 key 的钥匙串条目（清空配置用）
+    static func deleteKey(_ key: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+
+    private static func load(_ key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
 
 /// 设置页（v1.22 重构：归拢成两个入口——远程配置 / 名片信息）
 /// 远程配置：腾讯云 COS 存储桶、密钥、自定义域名（用于分享房源卡片链接）
@@ -93,7 +158,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 当前 App 版本号（读自工程配置，如 1.34）
+    /// 当前 App 版本号（读自工程配置，如 1.29）
     private var appVersion: String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
     }
@@ -170,7 +235,7 @@ enum CosConfigBackup {
             (KeychainKey.customDomain, customDomain)
         ]
         for item in items {
-            if !KeychainStore.save(item.1, for: item.0) {
+            if !KeychainFix.saveVerified(item.1, for: item.0) {
                 allSaved = false
             }
         }
@@ -331,7 +396,7 @@ struct CosConfigView: View {
             (KeychainKey.customDomain, customDomain)
         ]
         for (key, value) in items {
-            if !KeychainStore.save(value, for: key) {
+            if !KeychainFix.saveVerified(value, for: key) {
                 allSaved = false
             }
         }
@@ -417,7 +482,7 @@ struct CosConfigView: View {
             KeychainKey.customDomain
         ]
         for key in keys {
-            if !KeychainStore.delete(key) {
+            if !KeychainFix.deleteKey(key) {
                 allCleared = false
             }
         }
@@ -482,7 +547,7 @@ struct ConfigDocumentImporter: UIViewControllerRepresentable {
 /// （分享缓存里存了名片，名片一变缓存自动失效，无需手动清缓存）。
 /// v1.26：①新增实时名片预览；②说明应用范围覆盖所有出现姓名/电话的位置
 /// （H5 名片区、微信卡片描述、页面底栏电话、拨打电话/复制电话）。
-/// v1.27：新增「微信二维码」入口——从相册选择二维码图片保存（Documents/备份/qrcode.png），
+/// v1.27：新增「微信二维码」入口——从相册选择二维码图片保存（Documents/qrcode.png），
 /// 分享时自动上传 COS 并显示在所有 H5 名片板块左侧，访客长按可直接被微信识别。
 struct ShareProfileView: View {
     @State private var shareName = ""
@@ -634,8 +699,8 @@ struct ShareProfileView: View {
             savedTip = "姓名不能为空"
             return
         }
-        var ok = KeychainStore.save(name, for: KeychainKey.shareName)
-        ok = KeychainStore.save(phone, for: KeychainKey.sharePhone) && ok
+        var ok = KeychainFix.saveVerified(name, for: KeychainKey.shareName)
+        ok = KeychainFix.saveVerified(phone, for: KeychainKey.sharePhone) && ok
         savedTip = ok ? "名片信息已保存 ✅\n姓名：\(name)\n电话：\(phone.isEmpty ? "（未填，分享时用默认号）" : phone)" : "写入本机钥匙串失败，请重新保存一次"
     }
 }
