@@ -370,7 +370,9 @@ struct EmptyStateView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 24)
+        // v1.32：恢复撑满列表区域（maxHeight: .infinity），空态占据筛选栏以下的剩余空间并居中，
+        // 首页内容块不再整体收缩被居中顶到页面中间（修复「搜索无结果时空态下沉」）
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 32)
     }
 }
