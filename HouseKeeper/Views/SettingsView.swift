@@ -139,21 +139,26 @@ enum CosConfigBackup {
     }
 
     /// 从 JSON 文本恢复配置到钥匙串；返回 (是否成功, 提示)
-    static func restore(fromJSON json: String) -> (ok: Bool, message: String) {
-        guard let data = json.data(using: .utf8),
-              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+    static func restore(fromJSON json: String) -> (Bool, String) {
+        guard let data = json.data(using: .utf8) else {
+            return (false, "剪贴板内容不是有效的配置文本，请确认复制的是「备份配置」生成的 JSON")
+        }
+        let parsed: Any?
+        do {
+            parsed = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            return (false, "剪贴板内容不是有效的配置文本，请确认复制的是「备份配置」生成的 JSON")
+        }
+        guard let dict = parsed as? [String: Any] else {
             return (false, "剪贴板内容不是有效的配置文本，请确认复制的是「备份配置」生成的 JSON")
         }
         let trimSet = CharacterSet.whitespacesAndNewlines
-        func str(_ key: String) -> String {
-            (dict[key] as? String ?? "").trimmingCharacters(in: trimSet)
-        }
-        let bucket = str("bucket")
-        let region = str("region")
-        let secretId = str("secretId")
-        let secretKey = str("secretKey")
-        let customDomain = str("customDomain")
-        guard !bucket.isEmpty, !region.isEmpty, !secretId.isEmpty, !secretKey.isEmpty else {
+        let bucket = (dict["bucket"] as? String ?? "").trimmingCharacters(in: trimSet)
+        let region = (dict["region"] as? String ?? "").trimmingCharacters(in: trimSet)
+        let secretId = (dict["secretId"] as? String ?? "").trimmingCharacters(in: trimSet)
+        let secretKey = (dict["secretKey"] as? String ?? "").trimmingCharacters(in: trimSet)
+        let customDomain = (dict["customDomain"] as? String ?? "").trimmingCharacters(in: trimSet)
+        if bucket.isEmpty || region.isEmpty || secretId.isEmpty || secretKey.isEmpty {
             return (false, "配置缺少必填项（存储桶 / 地域 / SecretId / SecretKey），请检查备份文本")
         }
         var allSaved = true
@@ -164,13 +169,16 @@ enum CosConfigBackup {
             (KeychainKey.secretKey, secretKey),
             (KeychainKey.customDomain, customDomain)
         ]
-        for (key, value) in items {
-            if !KeychainStore.save(value, for: key) { allSaved = false }
+        for item in items {
+            if !KeychainStore.save(item.1, for: item.0) {
+                allSaved = false
+            }
         }
         if !allSaved {
             return (false, "写入本机钥匙串失败，请重试；若仍失败请重启 App 后再试")
         }
-        return (true, "配置已恢复：地域 \(region) / 存储桶 \(bucket)\n表单已刷新，可点「保存并验证连接」确认可用")
+        let msg = "配置已恢复：地域 " + region + " / 存储桶 " + bucket + "\n表单已刷新，可点「保存并验证连接」确认可用"
+        return (true, msg)
     }
 }
 
@@ -344,8 +352,8 @@ struct CosConfigView: View {
             return
         }
         let result = CosConfigBackup.restore(fromJSON: text)
-        savedTip = result.message
-        if result.ok {
+        savedTip = result.1
+        if result.0 {
             // 恢复成功后刷新表单，用户可直接看到刚恢复的值
             bucket = KeychainStore.load(KeychainKey.bucket) ?? ""
             region = KeychainStore.load(KeychainKey.region) ?? ""
