@@ -138,6 +138,8 @@ enum CosUploader {
     ///   ②完整版信息板块重排：第一行房号+户型、第二行租金+密码（密码：xxx）+房东（最右）、第三行备注；
     ///   ③H5 图片点击放大后支持左右滑动切换上一张/下一张；④视频不自动播放（点击才播，preload=none）；
     ///   ⑤户型标题去重（户型已含「上/下」时不再重复拼接房号后缀）
+    /// - v1.24：①视频彻底不自动播放（video 不带 src，封面+播放按钮，点击才注入播放，微信无法自动播）；
+    ///   ②合集页标题改为「已为你挑选米兰X套优质房源」；③所有页面底栏改为「更多优质房源请与我联系-13288251132」
     /// 入参全部为值类型（ShareMediaFile / ShareHouseInfo），Task 内不触碰 SwiftData 模型，避免跨线程访问闪退
     static func shareCard(mediaFiles: [ShareMediaFile], roomKey: String, info: ShareHouseInfo, mode: ShareMode, config: CosConfig) async throws -> URL {
         guard !mediaFiles.isEmpty else { throw CosError.missingMedia }
@@ -175,7 +177,7 @@ enum CosUploader {
             return l < r
         }
 
-        // 3. 上传新增媒体并生成绝对 GET 签名 URL；视频生成 video 标签，图片收集 URL 待模板渲染（背景图防保存）
+        // 3. 上传新增媒体并生成绝对 GET 签名 URL；视频生成封面播放器（无 src），图片收集 URL 待模板渲染（背景图防保存）
         // v1.23：开启「分享时压缩」开关 → 视频压到 720p（H.264 mp4）、图片轻压缩（长边≤1600 JPEG q0.8）后再上传
         var videoTags: [String] = []
         var imageAbsURLs: [String] = []
@@ -199,8 +201,9 @@ enum CosUploader {
             }
             let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
             if item.kind == "video" {
-                // v1.23：视频自动播放（autoplay+muted+playsinline，微信内 H5 必须静音才能自动播；保留 controls 可调音量/暂停）
-                videoTags.append("<video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline autoplay muted preload=\"auto\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
+                // v1.24：视频不自动播放（根治方案：video 不带 src，只显示封面+播放按钮，点击后才注入 src 播放；
+                // 微信无法自动播放没有 src 的视频）
+                videoTags.append("<div class=\"vwrap\" onclick=\"playVideo(this,'\(absURL)')\"><div class=\"vthumb\" style=\"background-image:url('\(absURL)')\"></div><div class=\"vplay\">▶</div><video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\" poster=\"\(absURL)\"></video></div>")
             } else {
                 imageAbsURLs.append(absURL)
             }
@@ -324,7 +327,7 @@ enum CosUploader {
                 try await upload(data: data, to: remotePath, contentType: contentType, config: config)
                 let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
                 if m.kind == "video" {
-                    videoTags.append("<video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline autoplay muted preload=\"auto\" poster=\"\(absURL)\" src=\"\(absURL)\"></video>")
+                    videoTags.append("<div class=\"vwrap\" onclick=\"playVideo(this,'\(absURL)')\"><div class=\"vthumb\" style=\"background-image:url('\(absURL)')\"></div><div class=\"vplay\">▶</div><video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\" poster=\"\(absURL)\"></video></div>")
                 } else {
                     imageAbsURLs.append(absURL)
                 }
@@ -436,7 +439,12 @@ enum CosUploader {
         .nav-pill{display:inline-flex;align-items:center;gap:4px;background:rgba(255,255,255,.18);border-radius:999px;padding:6px 12px;font-size:13px;margin-left:auto;}
         .sec{font-size:15px;color:#3a3a3c;margin:18px 4px 10px;font-weight:600;}
         .media{background:#fff;border-radius:16px;padding:12px;}
-        .media video{width:100%;border-radius:10px;display:block;margin-bottom:10px;background:#000;}
+        .vwrap{position:relative;width:100%;aspect-ratio:4/3;border-radius:10px;overflow:hidden;margin-bottom:10px;background:#000;cursor:pointer;}
+        .vthumb{position:absolute;inset:0;background-size:cover;background-position:center;}
+        .vplay{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;color:#fff;font-size:28px;border:2px solid rgba(255,255,255,.85);}
+        .vwrap video{width:100%;height:100%;display:none;background:#000;}
+        .vwrap.playing .vthumb,.vwrap.playing .vplay{display:none;}
+        .vwrap.playing video{display:block;}
         .cell{width:100%;aspect-ratio:4/3;border-radius:10px;background-size:cover;background-position:center;background-color:#e8e8ec;margin-bottom:10px;}
         .card{background:#fff;border-radius:16px;padding:16px;margin-top:12px;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
@@ -478,12 +486,13 @@ enum CosUploader {
             <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
           </div>
         </section>
-        <div class="foot">更多米兰优质房源请与我联系</div>
+        <div class="foot">更多优质房源请与我联系-13288251132</div>
         </div>
         <div id="toast"></div>
         <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
         <script>
         var GALLERY=[\(galleryJS)];var gi=0;
+        function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}v.play();w.className=w.className+' playing';}
         function openImg(i){gi=i;show();}
         function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"')";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
         function lbPrev(){gi=(gi-1+GALLERY.length)%GALLERY.length;show();}
@@ -537,7 +546,12 @@ enum CosUploader {
         .remark{margin-top:10px;font-size:13px;color:rgba(255,255,255,.7);}
         .sec{font-size:15px;color:#3a3a3c;margin:18px 4px 10px;font-weight:600;}
         .media{background:#fff;border-radius:16px;padding:12px;}
-        .media video{width:100%;border-radius:10px;display:block;margin-bottom:10px;background:#000;}
+        .vwrap{position:relative;width:100%;aspect-ratio:4/3;border-radius:10px;overflow:hidden;margin-bottom:10px;background:#000;cursor:pointer;}
+        .vthumb{position:absolute;inset:0;background-size:cover;background-position:center;}
+        .vplay{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;color:#fff;font-size:28px;border:2px solid rgba(255,255,255,.85);}
+        .vwrap video{width:100%;height:100%;display:none;background:#000;}
+        .vwrap.playing .vthumb,.vwrap.playing .vplay{display:none;}
+        .vwrap.playing video{display:block;}
         .cell{width:100%;aspect-ratio:4/3;border-radius:10px;background-size:cover;background-position:center;background-color:#e8e8ec;margin-bottom:10px;}
         .card{background:#fff;border-radius:16px;padding:16px;margin-top:12px;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
@@ -577,12 +591,13 @@ enum CosUploader {
             <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
           </div>
         </section>
-        <div class="foot">更多米兰优质房源请与我联系</div>
+        <div class="foot">更多优质房源请与我联系-13288251132</div>
         </div>
         <div id="toast"></div>
         <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
         <script>
         var GALLERY=[\(galleryJS)];var gi=0;
+        function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}v.play();w.className=w.className+' playing';}
         function openImg(i){gi=i;show();}
         function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"')";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
         function lbPrev(){gi=(gi-1+GALLERY.length)%GALLERY.length;show();}
@@ -615,11 +630,11 @@ enum CosUploader {
         let desc: String
         switch mode {
         case .masked:
-            title = "米兰公馆 · \(count)套房源"
+            title = "已为你挑选米兰\(count)套优质房源"
             desc = "利保米兰公馆\n\(name)-\(phone)"
         case .full:
             let minPrice = rooms.map { $0.item.priceText }.min() ?? ""
-            title = "米兰公馆 · \(count)套房源"
+            title = "已为你挑选米兰\(count)套优质房源"
             desc = (minPrice.isEmpty ? "精选\(count)套房源" : "精选\(count)套房源 · 起租\(minPrice)") + "\n\(name)-\(phone)"
         }
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
@@ -706,7 +721,12 @@ enum CosUploader {
         .remark{margin-top:10px;font-size:13px;color:rgba(255,255,255,.7);}
         .sec{font-size:15px;color:#3a3a3c;margin:18px 4px 10px;font-weight:600;}
         .media{background:#fff;border-radius:16px;padding:12px;}
-        .media video{width:100%;border-radius:10px;display:block;margin-bottom:10px;background:#000;}
+        .vwrap{position:relative;width:100%;aspect-ratio:4/3;border-radius:10px;overflow:hidden;margin-bottom:10px;background:#000;cursor:pointer;}
+        .vthumb{position:absolute;inset:0;background-size:cover;background-position:center;}
+        .vplay{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;color:#fff;font-size:28px;border:2px solid rgba(255,255,255,.85);}
+        .vwrap video{width:100%;height:100%;display:none;background:#000;}
+        .vwrap.playing .vthumb,.vwrap.playing .vplay{display:none;}
+        .vwrap.playing video{display:block;}
         .cell{width:100%;aspect-ratio:4/3;border-radius:10px;background-size:cover;background-position:center;background-color:#e8e8ec;margin-bottom:10px;}
         .card{background:#fff;border-radius:16px;padding:16px;margin-top:12px;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
@@ -738,7 +758,7 @@ enum CosUploader {
           <div class="items">
         \(itemsHTML)
           </div>
-          <div class="foot">更多米兰优质房源请与我联系</div>
+          <div class="foot">更多优质房源请与我联系-13288251132</div>
         </div>
         <div id="detailView" style="display:none">
           <button class="back" type="button" onclick="showList()">‹ 返回房源列表</button>
@@ -750,6 +770,7 @@ enum CosUploader {
         <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
         <script>
         var GALLERY=[\(galleryJS)];var gi=0;
+        function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}v.play();w.className=w.className+' playing';}
         var ROOMS=[\(roomsJS)];
         function showDetail(i){document.getElementById('listView').style.display='none';document.getElementById('detailView').style.display='block';document.getElementById('detailBody').innerHTML=ROOMS[i];window.scrollTo(0,0);}
         function showList(){document.getElementById('detailView').style.display='none';document.getElementById('listView').style.display='block';window.scrollTo(0,0);}
@@ -800,7 +821,7 @@ enum CosUploader {
         return parts.joined(separator: "")
     }
 
-    /// 媒体块：视频标签原样输出（置顶），图片渲染为背景图 div（单列、防长按保存、点击放大进 GALLERY）
+    /// 媒体块：视频封面播放器原样输出（置顶），图片渲染为背景图 div（单列、防长按保存、点击放大进 GALLERY）
     private static func mediaBlockHTML(videoTags: [String], imageURLs: [String]) -> String {
         var parts: [String] = []
         for tag in videoTags { parts.append(tag) }
