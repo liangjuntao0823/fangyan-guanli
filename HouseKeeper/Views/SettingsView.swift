@@ -266,8 +266,9 @@ struct CosConfigView: View {
     @State private var customDomain = ""
     @State private var savedTip: String?
     @State private var isVerifying = false
-    // v1.34：文件备份 / 恢复 + 清空配置（v1.35：备份直写「备份」文件夹，不再弹文件选择器）
-    @State private var isImporting = false
+    // v1.34：文件备份 / 恢复 + 清空配置（v1.35：备份直写「备份」文件夹；v1.36：恢复改为列表选择）
+    @State private var showRestoreList = false
+    @State private var showImporter = false
     @State private var confirmClear = false
 
     init() {
@@ -311,40 +312,51 @@ struct CosConfigView: View {
             }
 
             Section {
-                Button {
-                    saveAndVerify()
-                } label: {
-                    if isVerifying {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Text("保存并验证连接")
+                HStack(spacing: 12) {
+                    Button {
+                        saveAndVerify()
+                    } label: {
+                        if isVerifying {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Text("保存并验证连接")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(red: 31/255, green: 58/255, blue: 95/255))
+                    .disabled(bucket.isEmpty || region.isEmpty || secretId.isEmpty || secretKey.isEmpty || isVerifying)
+                    // v1.35：访问储存桶——用当前填写的桶名/地域直接打开腾讯云 COS 控制台对应桶
+                    Button {
+                        openBucketConsole()
+                    } label: {
+                        Label("访问储存桶", systemImage: "safari")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
                             .frame(maxWidth: .infinity)
                     }
+                    .buttonStyle(.bordered)
+                    .disabled(bucket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                             || region.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                .disabled(bucket.isEmpty || region.isEmpty || secretId.isEmpty || secretKey.isEmpty || isVerifying)
-                // v1.35：访问储存桶——用当前填写的桶名/地域直接打开腾讯云 COS 控制台对应桶
-                Button {
-                    openBucketConsole()
-                } label: {
-                    Label("访问储存桶", systemImage: "safari")
-                }
-                .disabled(bucket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                         || region.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             } footer: {
                 Text("「保存并验证连接」会用当前配置上传测试文件并回读，成功才提示「配置正确」；「访问储存桶」用当前填写的桶名和地域打开腾讯云控制台。")
             }
 
             // v1.34：备份 / 恢复配置（文件方式）——备份生成「桶名_地域_日期.json」文件，
             // v1.35：备份文件直接生成到「房源管家」→「备份」文件夹，不再弹出文件选择器
-            Section(header: Text("备份 / 恢复配置"), footer: Text("点「备份配置到文件」后，备份文件（桶名_地域_日期.json，含密钥）会直接生成到 iOS「文件」App → 我的 iPhone → 房源管家 → 「备份」文件夹，随整个「备份」文件夹一起备份即可。换机 / 重装 / 误改后，点「从备份文件恢复配置」选择该文件即可一键还原。含密钥内容请勿外泄。")) {
+            // v1.36：恢复改为 App 内列表选择（租房管家式写法，避免系统文件选择器点击无反应）
+            Section(header: Text("备份 / 恢复配置"), footer: Text("点「备份配置到文件」后，备份文件（桶名_地域_日期.json，含密钥）会直接生成到 iOS「文件」App → 我的 iPhone → 房源管家 → 「备份」文件夹，随整个「备份」文件夹一起备份即可。换机 / 重装 / 误改后，点「从备份文件恢复配置」在列表中选择备份文件（或从其他位置导入）即可一键还原。含密钥内容请勿外泄。")) {
                 Button {
                     prepareBackupFile()
                 } label: {
                     Label("备份配置到文件", systemImage: "square.and.arrow.up")
                 }
                 Button {
-                    isImporting = true
+                    showRestoreList = true
                 } label: {
                     Label("从备份文件恢复配置", systemImage: "square.and.arrow.down")
                 }
@@ -374,9 +386,28 @@ struct CosConfigView: View {
         }
         .navigationTitle("远程配置")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $isImporting) {
-            ConfigDocumentImporter { url in
-                handleRestoreFile(url)
+        .sheet(isPresented: $showRestoreList) {
+            ConfigRestoreListView(
+                onPick: { url in
+                    handleRestoreFile(url)
+                },
+                onImportOther: {
+                    // 先关列表再弹系统选择器（延迟 0.35s 避免 sheet 交替冲突，租房管家同款写法）
+                    showRestoreList = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showImporter = true
+                    }
+                }
+            )
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json], allowsMultipleSelection: false) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    handleRestoreFile(url)
+                }
+            case .failure(let error):
+                savedTip = "无法读取所选文件：\(error.localizedDescription)"
             }
         }
         .alert("配置结果", isPresented: Binding(
@@ -534,29 +565,104 @@ struct CosConfigView: View {
     }
 }
 
-// MARK: - 文件选择器包装（v1.34：恢复导入；v1.35：备份改为直写「备份」文件夹，导出器已移除）
+// MARK: - 恢复配置（v1.36：租房管家式列表选择，替代系统文件选择器避免点击无反应）
 
-/// 导入备份文件：用户从任意位置选择备份 .json 文件
-struct ConfigDocumentImporter: UIViewControllerRepresentable {
+/// 列出「备份」文件夹内的 .json 备份文件，点击直接恢复（与租房管家 RestoreBackupView 同款写法）；
+/// 列表底部提供「从其他位置选择」用系统文件选择器兜底（保留自由选择路径的能力）
+struct ConfigRestoreListView: View {
     let onPick: (URL) -> Void
+    let onImportOther: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var files: [URL] = []
 
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.json])
-        picker.delegate = context.coordinator
-        return picker
+    var body: some View {
+        NavigationStack {
+            Group {
+                if files.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "tray")
+                            .font(.system(size: 44))
+                            .foregroundColor(.secondary)
+                        Text("「备份」文件夹里还没有备份文件")
+                            .font(.headline)
+                        Text("请先点「备份配置到文件」生成备份，或把备份 .json 文件放进 iOS「文件」App → 我的 iPhone → 房源管家 → 备份 文件夹")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                        Button {
+                            onImportOther()
+                        } label: {
+                            Label("从其他位置选择…", systemImage: "folder")
+                                .font(.subheadline)
+                        }
+                        .padding(.top, 6)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(files, id: \.self) { url in
+                            Button {
+                                onPick(url)
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "doc.text")
+                                        .foregroundColor(.blue)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(url.lastPathComponent)
+                                            .font(.body)
+                                            .foregroundColor(.primary)
+                                        Text(fileSize(of: url))
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                        Section {
+                            Button {
+                                onImportOther()
+                            } label: {
+                                Label("从其他位置选择…", systemImage: "folder")
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .navigationTitle("选择备份文件")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            .onAppear(perform: loadFiles)
+        }
     }
 
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+    /// 列出「备份」文件夹内的 .json 文件，按文件名（含日期）倒序，最新的在最上面
+    private func loadFiles() {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(
+            at: DataRoot.url(),
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        files = items
+            .filter { $0.pathExtension.lowercased() == "json" }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+    }
 
-    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
-
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onPick: (URL) -> Void
-        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            guard let url = urls.first else { return }
-            onPick(url)
-        }
+    private func fileSize(of url: URL) -> String {
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
     }
 }
 
