@@ -248,7 +248,7 @@ struct CosConfigView: View {
             }
 
             // v1.33：备份 / 恢复配置（换机、重装、误改后一键恢复）
-            Section("备份 / 恢复配置") {
+            Section(header: Text("备份 / 恢复配置"), footer: Text("备份会把当前配置（含密钥）复制到剪贴板，请粘贴到备忘录或微信「文件传输助手」妥善保存；换机 / 重装 / 误改后，复制备份文本回来点「从剪贴板恢复配置」即可。含密钥内容请勿外泄。")) {
                 Button {
                     backupCosConfig()
                 } label: {
@@ -259,8 +259,6 @@ struct CosConfigView: View {
                 } label: {
                     Label("从剪贴板恢复配置", systemImage: "square.and.arrow.down")
                 }
-            } footer: {
-                Text("备份会把当前配置（含密钥）复制到剪贴板，请粘贴到备忘录或微信「文件传输助手」妥善保存；换机 / 重装 / 误改后，复制备份文本回来点「从剪贴板恢复配置」即可。含密钥内容请勿外泄。")
             }
 
             // v1.28：开通步骤从设置主页面移入本页（仅首次配置需要）
