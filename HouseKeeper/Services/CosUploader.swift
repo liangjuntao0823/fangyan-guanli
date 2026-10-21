@@ -94,6 +94,43 @@ enum ShareMode: String {
     }
 }
 
+// MARK: - 名片微信二维码（v1.27）
+
+/// 微信二维码存储：设置页「名片信息」上传保存为 Documents/qrcode.png。
+/// 分享时若已设置二维码，统一压缩后上传 COS 固定路径 h/_qrcode/qr.jpg（覆盖写），
+/// 所有 H5 名片板块用该固定路径的签名 URL 引用——二维码更换后，
+/// 之前已发出的分享链接会自动显示新二维码（路径不变，读取的是当前对象内容），无需重新分享。
+enum QrcodeStore {
+    static let fileName = "qrcode.png"
+
+    static var fileURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(fileName)
+    }
+
+    @discardableResult
+    static func save(_ data: Data) -> Bool {
+        do {
+            try data.write(to: fileURL)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func loadData() -> Data? {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        return try? Data(contentsOf: fileURL)
+    }
+
+    static func exists() -> Bool {
+        FileManager.default.fileExists(atPath: fileURL.path)
+    }
+
+    static func clear() {
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+}
+
 // MARK: - 腾讯云 COS V5 预签名上传（HMAC-SHA1，零第三方依赖）
 
 enum CosUploader {
@@ -105,7 +142,9 @@ enum CosUploader {
     /// mediaBlockHTML 等）后必须 +1——缓存校验会比对模板版本，版本变了旧缓存自动失效，
     /// 下次分享自动重新生成并上传新页面，无需任何手动操作。
     /// 这就解决了「改了网页设计但房源信息没变化、缓存命中还是旧链接」的问题。
-    static let htmlTemplateVersion = 2
+    /// v1.27：名片板块改版（二维码 + 新底色）→ 2→3；且二维码是否存在也纳入缓存校验（qrcodeSet），
+    /// 用户设置/清除二维码后旧缓存自动失效重新生成页面。
+    static let htmlTemplateVersion = 3
 
     enum CosError: LocalizedError {
         case invalidConfig
@@ -153,13 +192,16 @@ enum CosUploader {
         // 0. 缓存命中（按模式）：媒体清单、房源信息、COS 配置（含自定义域名）都没变化 → 直接复用上次链接，零上传
         // v1.23：压缩开关也纳入缓存校验——开关变化 → 旧缓存失效 → 重新压缩上传
         // v1.25：HTML 模板版本纳入校验——模板改动 → 旧缓存失效 → 重新生成新页面（避免改设计后还用旧链接）
+        // v1.27：二维码是否存在（qrcodeSet）纳入校验——设置/清除二维码后旧缓存失效重新生成
         let compressOnShare = UserDefaults.standard.bool(forKey: "compressOnShare")
+        let hasQR = QrcodeStore.exists()
         if let cached = ShareCacheStore.load(roomKey: roomKey, mode: mode.rawValue),
            cached.bucket == config.bucket,
            cached.region == config.region,
            (cached.customDomain ?? "") == config.customDomain,
            (cached.compressOnShare ?? false) == compressOnShare,
            (cached.templateVersion ?? 0) == htmlTemplateVersion,
+           (cached.qrcodeSet ?? false) == hasQR,
            Set(cached.mediaFiles) == Set(mediaFiles),
            cached.info == info,
            let cachedURL = URL(string: cached.shareURL) {
@@ -235,6 +277,14 @@ enum CosUploader {
             }
         }
 
+        // 4.1 名片微信二维码（v1.27）：设置页已上传时，压成小图覆盖写到 COS 固定路径 h/_qrcode/qr.jpg；
+        //     页面用固定路径签名 URL 引用 → 之后更换二维码，已发出的旧链接也自动显示新图
+        var qrSrc = ""
+        if hasQR, let qrData = makeQRCodeJPEG() {
+            try? await upload(data: qrData, to: "h/_qrcode/qr.jpg", contentType: "image/jpeg", config: config)
+            qrSrc = (try? presignedGetURL(for: "h/_qrcode/qr.jpg", expires: shareLinkExpires, config: config).absoluteString) ?? ""
+        }
+
         // 5. 生成并上传分享页（路径无扩展名；两模式独立页面）。链接追加版本参数 v（内容更新 → v 变 → 微信重新抓卡片）
         let pagePath = "h/\(roomKey)/\(mode.pageSuffix)"
         let shareURL = try presignedGetURL(for: pagePath, expires: shareLinkExpires, config: config)
@@ -254,7 +304,7 @@ enum CosUploader {
                 title: title, desc: desc,
                 name: name, phone: phone,
                 videoTags: videoTags, imageURLs: imageAbsURLs,
-                coverSrc: coverSrc, shareLink: versionedURL.absoluteString
+                coverSrc: coverSrc, qrSrc: qrSrc, shareLink: versionedURL.absoluteString
             )
         case .full:
             let title = "\(info.displayRoomNo) · \(info.layout.isEmpty ? "房源" : info.layout)"
@@ -263,7 +313,7 @@ enum CosUploader {
                 title: title, desc: desc,
                 info: info, name: name, phone: phone,
                 videoTags: videoTags, imageURLs: imageAbsURLs,
-                coverSrc: coverSrc, shareLink: versionedURL.absoluteString
+                coverSrc: coverSrc, qrSrc: qrSrc, shareLink: versionedURL.absoluteString
             )
         }
         try await upload(data: Data(html.utf8), to: pagePath, contentType: "text/html; charset=utf-8", config: config)
@@ -277,7 +327,8 @@ enum CosUploader {
             region: config.region,
             customDomain: config.customDomain,
             compressOnShare: compressOnShare,
-            templateVersion: htmlTemplateVersion
+            templateVersion: htmlTemplateVersion,
+            qrcodeSet: hasQR
         ))
 
         return versionedURL
@@ -298,7 +349,9 @@ enum CosUploader {
         // v1.23：压缩开关纳入缓存校验——开关变化 → 合集重新压缩上传
         // v1.25：①模板版本纳入校验——模板改动 → 旧合集缓存自动失效重新生成；
         //   ②合集房源比较改为【顺序无关】（Set）——多选点选顺序变化不再误判为变化导致重传
+        // v1.27：二维码是否存在（qrcodeSet）纳入校验——设置/清除二维码后旧合集缓存自动失效
         let compressOnShare = UserDefaults.standard.bool(forKey: "compressOnShare")
+        let hasQR = QrcodeStore.exists()
         let sortedKeys = validRooms.map { $0.roomKey }.sorted().joined(separator: "_")
         let cacheKey = "collection_\(sortedKeys)"
         let cacheMode = "collection-\(mode.rawValue)"
@@ -308,6 +361,7 @@ enum CosUploader {
            (cached.customDomain ?? "") == config.customDomain,
            (cached.compressOnShare ?? false) == compressOnShare,
            (cached.templateVersion ?? 0) == htmlTemplateVersion,
+           (cached.qrcodeSet ?? false) == hasQR,
            cached.info.name == name,
            cached.info.phone == phone,
            Set(cached.collectionRooms ?? []) == Set(validRooms),
@@ -370,8 +424,14 @@ enum CosUploader {
 
         // 2. 生成并上传合集页
         let collectionCover = prepared.first?.coverSrc ?? ""
+        // v1.27：名片微信二维码——固定路径覆盖写，旧合集链接自动显示新二维码
+        var qrSrc = ""
+        if hasQR, let qrData = makeQRCodeJPEG() {
+            try? await upload(data: qrData, to: "h/_qrcode/qr.jpg", contentType: "image/jpeg", config: config)
+            qrSrc = (try? presignedGetURL(for: "h/_qrcode/qr.jpg", expires: shareLinkExpires, config: config).absoluteString) ?? ""
+        }
         let pagePath = "h/_collection/\(sortedKeys).\(mode.pageSuffix)"
-        let html = buildCollectionHTML(rooms: prepared, mode: mode, name: name, phone: phone, coverSrc: collectionCover)
+        let html = buildCollectionHTML(rooms: prepared, mode: mode, name: name, phone: phone, coverSrc: collectionCover, qrSrc: qrSrc)
         try await upload(data: Data(html.utf8), to: pagePath, contentType: "text/html; charset=utf-8", config: config)
 
         let shareURL = try presignedGetURL(for: pagePath, expires: shareLinkExpires, config: config)
@@ -391,7 +451,8 @@ enum CosUploader {
             customDomain: config.customDomain,
             compressOnShare: compressOnShare,
             collectionRooms: validRooms,
-            templateVersion: htmlTemplateVersion
+            templateVersion: htmlTemplateVersion,
+            qrcodeSet: hasQR
         ))
 
         return versionedURL
@@ -436,11 +497,14 @@ enum CosUploader {
 
     /// 脱敏版（隐藏版）：户型大字 → 位置+导航 → 实拍（视频置顶、图片单列）→ 名片 → 底栏
     /// 无房号/价格/房东/密码/备注；图片用 CSS 背景图渲染（微信长按背景图无「保存图片」），全局禁右键/禁长按选择
-    private static func buildMaskedHTML(title: String, desc: String, name: String, phone: String, videoTags: [String], imageURLs: [String], coverSrc: String, shareLink: String) -> String {
+    /// v1.27：名片板块换浅蓝底色；微信二维码（真实 <img>，可长按被微信识别）放左侧，原居中信息右移
+    private static func buildMaskedHTML(title: String, desc: String, name: String, phone: String, videoTags: [String], imageURLs: [String], coverSrc: String, qrSrc: String, shareLink: String) -> String {
         let mediaBlock = mediaBlockHTML(videoTags: videoTags, imageURLs: imageURLs)
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
         let urlMeta = shareLink.isEmpty ? "" : "<meta property=\"og:url\" content=\"\(shareLink)\">"
         let galleryJS = imageURLs.map { "'\($0)'" }.joined(separator: ",")
+        let qrImg = qrSrc.isEmpty ? "" : "<img class=\"qr\" src=\"\(qrSrc)\" alt=\"微信二维码\">"
+        let qrWrapClass = qrSrc.isEmpty ? " qr-wrap center" : " qr-wrap"
         return """
         <!DOCTYPE html>
         <html lang="zh-CN">
@@ -470,7 +534,11 @@ enum CosUploader {
         .vwrap.playing video{display:block;}
         .cellwrap{width:100%;aspect-ratio:4/3;border-radius:10px;overflow:hidden;background-color:#e8e8ec;margin-bottom:10px;cursor:pointer;}
         .cell{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;-webkit-user-drag:none;-webkit-touch-callout:none;}
-        .card{background:#fff;border-radius:16px;padding:16px;margin-top:12px;text-align:center;}
+        .card{background:linear-gradient(180deg,#f7fafd,#e9f1f9);border:1px solid #dfe9f3;border-radius:16px;padding:14px;margin-top:12px;}
+        .qr-wrap{display:flex;align-items:center;gap:14px;}
+        .qr-wrap.center{justify-content:center;}
+        .qr{width:108px;height:108px;border-radius:10px;object-fit:cover;flex-shrink:0;background:#fff;border:1px solid #e3e3e8;-webkit-touch-callout:default;-webkit-user-select:text;user-select:text;-webkit-user-drag:auto;}
+        .card-info{flex:1;min-width:0;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
         .row{display:flex;align-items:center;justify-content:center;gap:8px;}
         .name{font-size:17px;font-weight:600;}
@@ -502,12 +570,17 @@ enum CosUploader {
         <h2 class="sec">实拍 · 点击放大</h2>
         \(mediaBlock)
         <section class="card">
-          <div class="tag">米兰租赁管家 · 专业省心租好房</div>
-          <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
-          <div class="note">微信同号 · 24小时可约看房</div>
-          <div class="btns">
-            <a class="btn call" href="tel:\(escapeHTML(phone))">拨打电话</a>
-            <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
+          <div class="\(qrWrapClass)">
+            \(qrImg)
+            <div class="card-info">
+              <div class="tag">米兰租赁管家 · 专业省心租好房</div>
+              <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
+              <div class="note">微信同号 · 24小时可约看房</div>
+              <div class="btns">
+                <a class="btn call" href="tel:\(escapeHTML(phone))">拨打电话</a>
+                <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
+              </div>
+            </div>
           </div>
         </section>
         <div class="foot">更多优质房源请与我联系-\(escapeHTML(phone))</div>
@@ -535,11 +608,13 @@ enum CosUploader {
 
     /// 完整版（不隐藏版）：v1.22 信息板块重排为三行——第一行：房号(左) + 户型(右)；第二行：租金 + 密码（密码：xxx）+ 房东（最右）；
     /// 第三行：备注（有才显示，空则整行隐藏）。实拍 → 名片 → 底栏
-    private static func buildFullHTML(title: String, desc: String, info: ShareHouseInfo, name: String, phone: String, videoTags: [String], imageURLs: [String], coverSrc: String, shareLink: String) -> String {
+    private static func buildFullHTML(title: String, desc: String, info: ShareHouseInfo, name: String, phone: String, videoTags: [String], imageURLs: [String], coverSrc: String, qrSrc: String, shareLink: String) -> String {
         let mediaBlock = mediaBlockHTML(videoTags: videoTags, imageURLs: imageURLs)
         let coverMeta = coverSrc.isEmpty ? "" : "<meta property=\"og:image\" content=\"\(coverSrc)\">"
         let urlMeta = shareLink.isEmpty ? "" : "<meta property=\"og:url\" content=\"\(shareLink)\">"
         let galleryJS = imageURLs.map { "'\($0)'" }.joined(separator: ",")
+        let qrImg = qrSrc.isEmpty ? "" : "<img class=\"qr\" src=\"\(qrSrc)\" alt=\"微信二维码\">"
+        let qrWrapClass = qrSrc.isEmpty ? " qr-wrap center" : " qr-wrap"
 
         let host = info.landlord.isEmpty ? "" : "<span class=\"host\">\(escapeHTML(info.landlord))</span>"
         let pw = info.password.isEmpty ? "" : "<span class=\"pw\">密码：\(escapeHTML(info.password))</span>"
@@ -578,7 +653,11 @@ enum CosUploader {
         .vwrap.playing video{display:block;}
         .cellwrap{width:100%;aspect-ratio:4/3;border-radius:10px;overflow:hidden;background-color:#e8e8ec;margin-bottom:10px;cursor:pointer;}
         .cell{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;-webkit-user-drag:none;-webkit-touch-callout:none;}
-        .card{background:#fff;border-radius:16px;padding:16px;margin-top:12px;text-align:center;}
+        .card{background:linear-gradient(180deg,#f7fafd,#e9f1f9);border:1px solid #dfe9f3;border-radius:16px;padding:14px;margin-top:12px;}
+        .qr-wrap{display:flex;align-items:center;gap:14px;}
+        .qr-wrap.center{justify-content:center;}
+        .qr{width:108px;height:108px;border-radius:10px;object-fit:cover;flex-shrink:0;background:#fff;border:1px solid #e3e3e8;-webkit-touch-callout:default;-webkit-user-select:text;user-select:text;-webkit-user-drag:auto;}
+        .card-info{flex:1;min-width:0;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
         .row{display:flex;align-items:center;justify-content:center;gap:8px;}
         .name{font-size:17px;font-weight:600;}
@@ -608,12 +687,17 @@ enum CosUploader {
         <h2 class="sec">实拍 · 点击放大</h2>
         \(mediaBlock)
         <section class="card">
-          <div class="tag">米兰租赁管家 · 专业省心租好房</div>
-          <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
-          <div class="note">微信同号 · 24小时可约看房</div>
-          <div class="btns">
-            <a class="btn call" href="tel:\(escapeHTML(phone))">拨打电话</a>
-            <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
+          <div class="\(qrWrapClass)">
+            \(qrImg)
+            <div class="card-info">
+              <div class="tag">米兰租赁管家 · 专业省心租好房</div>
+              <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
+              <div class="note">微信同号 · 24小时可约看房</div>
+              <div class="btns">
+                <a class="btn call" href="tel:\(escapeHTML(phone))">拨打电话</a>
+                <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
+              </div>
+            </div>
           </div>
         </section>
         <div class="foot">更多优质房源请与我联系-\(escapeHTML(phone))</div>
@@ -648,8 +732,10 @@ enum CosUploader {
         let coverSrc: String
     }
 
-    private static func buildCollectionHTML(rooms: [PreparedRoom], mode: ShareMode, name: String, phone: String, coverSrc: String) -> String {
+    private static func buildCollectionHTML(rooms: [PreparedRoom], mode: ShareMode, name: String, phone: String, coverSrc: String, qrSrc: String) -> String {
         let count = rooms.count
+        let qrImg = qrSrc.isEmpty ? "" : "<img class=\"qr\" src=\"\(qrSrc)\" alt=\"微信二维码\">"
+        let qrWrapClass = qrSrc.isEmpty ? " qr-wrap center" : " qr-wrap"
         // og
         let title: String
         let desc: String
@@ -696,7 +782,7 @@ enum CosUploader {
             </div>
             """)
 
-            let detail = collectionDetailHTML(item: room.item, mode: mode, videoTags: room.videoTags, imageURLs: room.imageURLs, startIndex: cursor, name: name, phone: phone)
+            let detail = collectionDetailHTML(item: room.item, mode: mode, videoTags: room.videoTags, imageURLs: room.imageURLs, startIndex: cursor, name: name, phone: phone, qrSrc: qrSrc)
             cursor += room.imageURLs.count
             gallery.append(contentsOf: room.imageURLs)
             // JS 单引号字符串转义：反斜杠 → \\ 、单引号 → \' 、换行 → \n（JS 字符串字面量不允许未转义换行）
@@ -756,7 +842,11 @@ enum CosUploader {
         .vwrap.playing video{display:block;}
         .cellwrap{width:100%;aspect-ratio:4/3;border-radius:10px;overflow:hidden;background-color:#e8e8ec;margin-bottom:10px;cursor:pointer;}
         .cell{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;-webkit-user-drag:none;-webkit-touch-callout:none;}
-        .card{background:#fff;border-radius:16px;padding:16px;margin-top:12px;text-align:center;}
+        .card{background:linear-gradient(180deg,#f7fafd,#e9f1f9);border:1px solid #dfe9f3;border-radius:16px;padding:14px;margin-top:12px;}
+        .qr-wrap{display:flex;align-items:center;gap:14px;}
+        .qr-wrap.center{justify-content:center;}
+        .qr{width:108px;height:108px;border-radius:10px;object-fit:cover;flex-shrink:0;background:#fff;border:1px solid #e3e3e8;-webkit-touch-callout:default;-webkit-user-select:text;user-select:text;-webkit-user-drag:auto;}
+        .card-info{flex:1;min-width:0;text-align:center;}
         .tag{color:#8e8e93;font-size:12px;margin-bottom:10px;}
         .row{display:flex;align-items:center;justify-content:center;gap:8px;}
         .name{font-size:17px;font-weight:600;}
@@ -787,13 +877,19 @@ enum CosUploader {
         \(itemsHTML)
           </div>
           <!-- v1.26：合集列表页底部也加名片（拨打电话/复制电话），与单套分享页一致 -->
+          <!-- v1.27：名片板块换浅蓝底色 + 微信二维码（真实 img，可长按被微信识别）放左侧，信息右移 -->
           <section class="card">
-            <div class="tag">米兰租赁管家 · 专业省心租好房</div>
-            <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
-            <div class="note">微信同号 · 24小时可约看房</div>
-            <div class="btns">
-              <a class="btn call" href="tel:\(escapeHTML(phone))">拨打电话</a>
-              <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
+            <div class="\(qrWrapClass)">
+              \(qrImg)
+              <div class="card-info">
+                <div class="tag">米兰租赁管家 · 专业省心租好房</div>
+                <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
+                <div class="note">微信同号 · 24小时可约看房</div>
+                <div class="btns">
+                  <a class="btn call" href="tel:\(escapeHTML(phone))">拨打电话</a>
+                  <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
+                </div>
+              </div>
             </div>
           </section>
           <div class="foot">更多优质房源请与我联系-\(escapeHTML(phone))</div>
@@ -828,8 +924,11 @@ enum CosUploader {
 
     /// 合集单套详情 HTML：脱敏=户型+导航；完整=房号+户型 / 价格+密码+房东 / 备注。媒体：视频置顶、图片单列。
     /// v1.26：详情底部也加名片（拨打电话/复制电话），与单套分享页一致
-    private static func collectionDetailHTML(item: ShareCollectionItem, mode: ShareMode, videoTags: [String], imageURLs: [String], startIndex: Int, name: String, phone: String) -> String {
+    /// v1.27：详情名片同样带微信二维码（真实 <img>，可长按识别）+ 浅蓝底色
+    private static func collectionDetailHTML(item: ShareCollectionItem, mode: ShareMode, videoTags: [String], imageURLs: [String], startIndex: Int, name: String, phone: String, qrSrc: String) -> String {
         var parts: [String] = []
+        let qrImg = qrSrc.isEmpty ? "" : "<img class=\"qr\" src=\"\(qrSrc)\" alt=\"微信二维码\">"
+        let qrWrapClass = qrSrc.isEmpty ? " qr-wrap center" : " qr-wrap"
         parts.append("<div class=\"dhero\">")
         if mode == .masked {
             parts.append("<div class=\"type\">\(escapeHTML(item.layout.isEmpty ? "房源" : item.layout))</div>")
@@ -861,12 +960,17 @@ enum CosUploader {
         // v1.26：详情页底部名片（与单套分享页一致），名字电话来自设置页
         parts.append("""
         <section class="card">
-          <div class="tag">米兰租赁管家 · 专业省心租好房</div>
-          <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
-          <div class="note">微信同号 · 24小时可约看房</div>
-          <div class="btns">
-            <a class="btn call" href="tel:\(escapeHTML(phone))">拨打电话</a>
-            <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
+          <div class="\(qrWrapClass)">
+            \(qrImg)
+            <div class="card-info">
+              <div class="tag">米兰租赁管家 · 专业省心租好房</div>
+              <div class="row"><span class="name">\(escapeHTML(name))</span><span class="num">\(escapeHTML(phone))</span></div>
+              <div class="note">微信同号 · 24小时可约看房</div>
+              <div class="btns">
+                <a class="btn call" href="tel:\(escapeHTML(phone))">拨打电话</a>
+                <button class="btn copy" type="button" onclick="copyPhone()">复制电话</button>
+              </div>
+            </div>
           </div>
         </section>
         """)
@@ -1068,6 +1172,34 @@ enum CosUploader {
         let scaled = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
         return scaled?.jpegData(compressionQuality: 0.72)
+    }
+
+    // MARK: - v1.27 名片微信二维码压缩
+
+    /// 生成名片二维码上传图：先居中裁剪成正方形（保证 H5 上 object-fit:cover 不裁掉二维码主体），
+    /// 再缩到长边 400px、JPEG q0.85（清晰且省流量）。读取失败返回 nil，调用方跳过二维码显示。
+    private static func makeQRCodeJPEG() -> Data? {
+        guard let data = QrcodeStore.loadData(),
+              let image = UIImage(data: data) else { return nil }
+        let side = min(image.size.width, image.size.height)
+        guard side > 0 else { return nil }
+        // 1. 居中裁剪成正方形
+        UIGraphicsBeginImageContextWithOptions(CGSize(width: side, height: side), false, 1.0)
+        let x = (image.size.width - side) / 2
+        let y = (image.size.height - side) / 2
+        image.draw(in: CGRect(x: -x, y: -y, width: image.size.width, height: image.size.height))
+        let cropped = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        guard let cropped else { return nil }
+        // 2. 缩到最长边 400
+        let maxSide: CGFloat = 400
+        let scale = min(maxSide / side, 1)
+        let target = CGSize(width: max(Int(side * scale), 1), height: max(Int(side * scale), 1))
+        UIGraphicsBeginImageContextWithOptions(target, false, 1.0)
+        cropped.draw(in: CGRect(origin: .zero, size: target))
+        let scaled = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        return scaled?.jpegData(compressionQuality: 0.85)
     }
 
     // MARK: - v1.23 分享时压缩（视频 720p / 图片轻压缩）
