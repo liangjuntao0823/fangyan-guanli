@@ -4,6 +4,8 @@ import SwiftUI
 /// 远程配置：腾讯云 COS 存储桶、密钥、自定义域名（用于分享房源卡片链接）
 /// 名片信息：分享 H5 页面与微信卡片上显示的姓名/电话（默认：梁涛 / 13288251132）
 struct SettingsView: View {
+    @State private var refreshedTip: String?
+
     var body: some View {
         Form {
             Section {
@@ -32,6 +34,19 @@ struct SettingsView: View {
                 Text("开启后：视频压缩到 720p 再上传，图片做轻压缩（不牺牲观感，参照微信「不加载原图」的画质），分享更快、更省流量。")
             }
 
+            // v1.25：分享缓存管理——改了分享页面样式后想立刻重新生成链接时手动刷新；
+            // 平时不需要：App 每次更新页面模板后旧缓存会自动失效，下次分享自动重新生成
+            Section {
+                Button {
+                    ShareCacheStore.clearAll()
+                    refreshedTip = "分享缓存已清空 ✅\n下次分享会重新上传并生成新链接（所有房源）"
+                } label: {
+                    Label("刷新分享缓存", systemImage: "arrow.clockwise.circle")
+                }
+            } footer: {
+                Text("平时无需操作：App 更新页面设计后，旧缓存会自动失效、分享自动生成新页面。仅当您想立刻重置全部缓存（例如改了页面样式想马上生效）时才需要点这里。")
+            }
+
             Section("开通步骤（简述）") {
                 Text("1. 打开 cloud.tencent.com 注册并实名认证；2. 开通「对象存储 COS」；3. 创建存储桶：名称建议 fangyuan88、地域选香港、访问权限选「私有读写」；4. 在「访问管理 CAM → API 密钥管理」新建密钥，得到 SecretId 和 SecretKey；5. 在「存储桶 → 域名与传输管理 → 自定义源站域名」绑定自己的域名（需先在腾讯云购买域名），并把域名填入远程配置的「自定义域名」栏——微信只认自定义域名，才能把链接抓成网页卡片。")
                     .font(.footnote)
@@ -43,6 +58,14 @@ struct SettingsView: View {
         }
         .navigationTitle("设置")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("刷新分享缓存", isPresented: Binding(
+            get: { refreshedTip != nil },
+            set: { if !$0 { refreshedTip = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(refreshedTip ?? "")
+        }
     }
 }
 
