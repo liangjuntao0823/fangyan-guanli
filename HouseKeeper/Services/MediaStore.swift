@@ -109,6 +109,7 @@ struct ShareCacheRecord: Codable {
     let customDomain: String?   // v1.19：生成链接时的自定义域名；换域名后旧缓存自动失效（Optional 兼容旧版缓存 JSON）
     var compressOnShare: Bool? = nil          // v1.23：生成链接时的「分享时压缩」开关状态；开关变化 → 缓存失效重新上传（Optional 兼容旧版）
     var collectionRooms: [ShareCollectionItem]? = nil   // v1.22：合集分享缓存——记录合集包含的每套房源快照；任一套变动 → 缓存失效重新生成（Optional 兼容旧版）
+    var templateVersion: Int? = nil           // v1.25：生成链接时的 HTML 模板版本；模板改动（改页面设计）→ 旧缓存自动失效重新生成（Optional 兼容旧版）
 }
 
 enum ShareCacheStore {
@@ -145,6 +146,15 @@ enum ShareCacheStore {
     static func save(roomKey: String, mode: String, record: ShareCacheRecord) {
         if let data = try? JSONEncoder().encode(record) {
             try? data.write(to: fileURL(roomKey: roomKey, mode: mode))
+        }
+    }
+
+    /// v1.25：清空全部分享缓存（设置页「刷新分享缓存」按钮调用）——
+    /// 改了页面样式、名片或想强制重新上传时手动触发；正常情况不需要，模板版本变化会自动失效
+    static func clearAll() {
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return }
+        for name in files where name.hasSuffix(".json") {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
         }
     }
 }
