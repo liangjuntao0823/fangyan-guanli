@@ -96,6 +96,37 @@ enum MediaStore {
     }
 }
 
+// MARK: - v1.29 数据备份说明（微信式文件夹备份）
+
+/// 在 Documents 生成「备份说明.txt」，引导用户：备份 = 复制整个「房源管家」文件夹，恢复 = 放回原位。
+/// v1.29 起全部数据都在 Documents 下（用户可见、可整体复制）：
+///   housekeeper.store（房源信息数据库）+ Media/（图片视频，按房号分文件夹）+ 备份说明.txt
+enum BackupGuide {
+    static func ensureExists() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let url = docs.appendingPathComponent("备份说明.txt")
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+        let text = """
+        「房源管家」数据备份说明
+        ========================
+
+        本 App 的全部数据都在当前这个文件夹里：
+        · housekeeper.store（房源信息数据库）
+        · Media/（所有房源图片和视频，按房号分文件夹）
+
+        【备份】在 iOS「文件」App → 我的 iPhone → 房源管家，长按本文件夹 → 拷贝/共享到
+        电脑、网盘或微信（建议存两处）。整个文件夹一起复制，一个都不能少。
+
+        【恢复】重装 App 后，把之前备份的整个文件夹内容放回「文件」App → 我的 iPhone →
+        房源管家 目录，再打开 App，房源信息和图片视频全部还原。
+
+        【注意】不要只复制 housekeeper.store——图片视频在 Media/ 里，
+        备份必须复制整个文件夹。
+        """
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
 // MARK: - 分享链接缓存（v1.18：同一房源的媒体与信息都没变化时，点分享直接复用上次链接，不再重复上传）
 // v1.21：缓存按「分享模式」双轨分开（脱敏 masked / 完整 full），两种分享互不影响、各自增量。
 

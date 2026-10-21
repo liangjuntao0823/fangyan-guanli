@@ -145,7 +145,8 @@ enum CosUploader {
     /// v1.27：名片板块改版（二维码 + 新底色）→ 2→3；且二维码是否存在也纳入缓存校验（qrcodeSet），
     /// 用户设置/清除二维码后旧缓存自动失效重新生成页面。
     /// v1.28：二维码下方新增「长按二维码加我好友」小字提示 → 3→4
-    static let htmlTemplateVersion = 4
+    /// v1.29：视频统一转 mp4 上传（安卓/微信可播），云端视频路径改 .mp4 → 4→5，旧缓存全部失效重传
+    static let htmlTemplateVersion = 5
 
     enum CosError: LocalizedError {
         case invalidConfig
@@ -233,32 +234,37 @@ enum CosUploader {
         var videoTags: [String] = []
         var imageAbsURLs: [String] = []
         for item in ordered {
-            let remotePath = "h/\(roomKey)/\(item.name)"
+            // v1.29：视频云端路径统一用 .mp4（安卓/微信可播）。本地保留原文件，上传/引用的是 mp4
+            let isVideo = item.kind == "video"
+            let remoteName = isVideo ? cloudVideoName(for: item.name) : item.name
+            let remotePath = "h/\(roomKey)/\(remoteName)"
             if toUpload.contains(item) {
                 let url = MediaStore.url(for: item.name, roomKey: roomKey)
                 guard FileManager.default.fileExists(atPath: url.path) else { continue }
                 var data = try Data(contentsOf: url)
-                var contentType = mimeType(for: item.kind)
-                if compressOnShare {
-                    if item.kind == "video", let compressed = await compressedVideoData(from: url) {
-                        data = compressed
+                var contentType = mimeType(for: item.kind, name: remoteName)
+                if isVideo {
+                    // v1.29：无论压缩开关，视频一律转 mp4 上传——安卓微信对 .mov/QuickTime 容器支持差，
+                    // mp4（H.264+AAC）iOS/安卓通吃；压缩开关开 → 720p，关 → 原质量转封装（不重编码，秒级）
+                    if let mp4 = await uploadVideoData(from: url, compress: compressOnShare) {
+                        data = mp4
                         contentType = "video/mp4"
-                    } else if item.kind == "image", let compressed = compressedImageData(from: url) {
-                        data = compressed
-                        contentType = "image/jpeg"
                     }
+                } else if compressOnShare, let compressed = compressedImageData(from: url) {
+                    data = compressed
+                    contentType = "image/jpeg"
                 }
                 try await upload(data: data, to: remotePath, contentType: contentType, config: config)
                 // v1.25：视频同时上传首帧封面图（几十 KB），页面封面用图片而非视频流
-                if item.kind == "video", let thumbData = makeVideoThumbJPEG(from: url) {
+                if isVideo, let thumbData = makeVideoThumbJPEG(from: url) {
                     try? await upload(data: thumbData, to: "h/\(roomKey)/\(item.name).vthumb.jpg", contentType: "image/jpeg", config: config)
                 }
             }
             let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
-            if item.kind == "video" {
+            if isVideo {
                 // v1.25：video 无 src、无 poster、无 autoplay；封面用独立首帧图；点击封面 playVideo 才注入 src 并播放
                 let thumbURL = (try? presignedGetURL(for: "h/\(roomKey)/\(item.name).vthumb.jpg", expires: shareLinkExpires, config: config).absoluteString) ?? absURL
-                videoTags.append("<div class=\"vwrap\" onclick=\"playVideo(this,'\(absURL)')\"><div class=\"vthumb\" style=\"background-image:url('\(thumbURL)')\"></div><div class=\"vplay\">▶</div><video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\"></video></div>")
+                videoTags.append("<div class=\"vwrap\" onclick=\"playVideo(this,'\(absURL)')\"><div class=\"vthumb\" style=\"background-image:url('\(thumbURL)')\"></div><div class=\"vplay\">▶</div><video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline webkit-playsinline preload=\"none\"></video></div>")
             } else {
                 imageAbsURLs.append(absURL)
             }
@@ -381,30 +387,33 @@ enum CosUploader {
             var videoTags: [String] = []
             var imageAbsURLs: [String] = []
             for m in ordered {
-                let remotePath = "h/\(item.roomKey)/\(m.name)"
+                let isVideo = m.kind == "video"
+                let remoteName = isVideo ? cloudVideoName(for: m.name) : m.name
+                let remotePath = "h/\(item.roomKey)/\(remoteName)"
                 let url = MediaStore.url(for: m.name, roomKey: item.roomKey)
                 guard FileManager.default.fileExists(atPath: url.path) else { continue }
                 var data = try Data(contentsOf: url)
-                var contentType = mimeType(for: m.kind)
-                if compressOnShare {
-                    if m.kind == "video", let compressed = await compressedVideoData(from: url) {
-                        data = compressed
+                var contentType = mimeType(for: m.kind, name: remoteName)
+                if isVideo {
+                    // v1.29：视频统一转 mp4 上传（安卓/微信可播）；压缩开 → 720p，关 → 原质量转封装
+                    if let mp4 = await uploadVideoData(from: url, compress: compressOnShare) {
+                        data = mp4
                         contentType = "video/mp4"
-                    } else if m.kind == "image", let compressed = compressedImageData(from: url) {
-                        data = compressed
-                        contentType = "image/jpeg"
                     }
+                } else if compressOnShare, let compressed = compressedImageData(from: url) {
+                    data = compressed
+                    contentType = "image/jpeg"
                 }
                 try await upload(data: data, to: remotePath, contentType: contentType, config: config)
                 // v1.25：视频同时上传首帧封面图（几十 KB），页面封面用图片而非视频流
-                if m.kind == "video", let thumbData = makeVideoThumbJPEG(from: url) {
+                if isVideo, let thumbData = makeVideoThumbJPEG(from: url) {
                     try? await upload(data: thumbData, to: "h/\(item.roomKey)/\(m.name).vthumb.jpg", contentType: "image/jpeg", config: config)
                 }
                 let absURL = try presignedGetURL(for: remotePath, expires: shareLinkExpires, config: config).absoluteString
-                if m.kind == "video" {
+                if isVideo {
                     // v1.25：video 无 src、无 poster、无 autoplay；封面用独立首帧图；点击封面 playVideo 才注入 src 并播放
                     let thumbURL = (try? presignedGetURL(for: "h/\(item.roomKey)/\(m.name).vthumb.jpg", expires: shareLinkExpires, config: config).absoluteString) ?? absURL
-                    videoTags.append("<div class=\"vwrap\" onclick=\"playVideo(this,'\(absURL)')\"><div class=\"vthumb\" style=\"background-image:url('\(thumbURL)')\"></div><div class=\"vplay\">▶</div><video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline preload=\"none\"></video></div>")
+                    videoTags.append("<div class=\"vwrap\" onclick=\"playVideo(this,'\(absURL)')\"><div class=\"vthumb\" style=\"background-image:url('\(thumbURL)')\"></div><div class=\"vplay\">▶</div><video class=\"v\" controls controlsList=\"nodownload\" disablepictureinpicture playsinline webkit-playsinline preload=\"none\"></video></div>")
                 } else {
                     imageAbsURLs.append(absURL)
                 }
@@ -598,7 +607,7 @@ enum CosUploader {
         <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
         <script>
         var GALLERY=[\(galleryJS)];var gi=0;
-        function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}v.play();w.className=w.className+' playing';}
+        function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}var p=v.play();if(p&&p.catch){p.catch(function(){});}w.className=w.className+' playing';}
         function openImg(i){gi=i;show();}
         function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"')";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
         function lbPrev(){gi=(gi-1+GALLERY.length)%GALLERY.length;show();}
@@ -717,7 +726,7 @@ enum CosUploader {
         <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
         <script>
         var GALLERY=[\(galleryJS)];var gi=0;
-        function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}v.play();w.className=w.className+' playing';}
+        function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}var p=v.play();if(p&&p.catch){p.catch(function(){});}w.className=w.className+' playing';}
         function openImg(i){gi=i;show();}
         function show(){var d=document.getElementById('lb');document.getElementById('lbImg').style.backgroundImage="url('"+GALLERY[gi]+"')";document.getElementById('lbCnt').textContent=(gi+1)+' / '+GALLERY.length;d.style.display='block';}
         function lbPrev(){gi=(gi-1+GALLERY.length)%GALLERY.length;show();}
@@ -917,7 +926,7 @@ enum CosUploader {
         <div id="lb"><div id="lbImg"></div><div id="lbPrev" onclick="lbPrev()">‹</div><div id="lbNext" onclick="lbNext()">›</div><div id="lbClose" onclick="lbClose()">✕</div><div id="lbCnt"></div></div>
         <script>
         var GALLERY=[\(galleryJS)];var gi=0;
-        function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}v.play();w.className=w.className+' playing';}
+        function playVideo(w,src){var v=w.querySelector('video');if(!v.src){v.src=src;}var p=v.play();if(p&&p.catch){p.catch(function(){});}w.className=w.className+' playing';}
         var ROOMS=[\(roomsJS)];
         function showDetail(i){document.getElementById('listView').style.display='none';document.getElementById('detailView').style.display='block';document.getElementById('detailBody').innerHTML=ROOMS[i];window.scrollTo(0,0);}
         function showList(){document.getElementById('detailView').style.display='none';document.getElementById('listView').style.display='block';window.scrollTo(0,0);}
@@ -1047,17 +1056,44 @@ enum CosUploader {
         guard w > 0, h > 0 else { return nil }
         let scale = min(maxSide / max(w, h), 1)
         let target = CGSize(width: max(Int(w * scale), 1), height: max(Int(h * scale), 1))
-        UIGraphicsBeginImageContextWithOptions(target, false, 1.0)
-        image.draw(in: CGRect(origin: .zero, size: target))
-        let scaled = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        return scaled?.jpegData(compressionQuality: 0.72)
+        return scaledJPEG(image, target: target, quality: 0.72)
+    }
+
+    /// v1.29：用 UIGraphicsImageRenderer 缩放并输出 JPEG（替代已废弃的 UIGraphicsBeginImageContextWithOptions，
+    /// 内存管理更优，避免隐式全局图形上下文在后台线程的告警）
+    private static func scaledJPEG(_ image: UIImage, target: CGSize, quality: CGFloat) -> Data? {
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: target, format: format)
+        return renderer.jpegData(withCompressionQuality: quality) { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
     }
 
     // MARK: - 上传 / 预签名
 
-    private static func mimeType(for kind: String) -> String {
-        kind == "video" ? "video/quicktime" : "image/jpeg"
+    /// v1.29：按「媒体类型 + 云端文件扩展名」返回正确 Content-Type。
+    /// 修复旧版视频恒返回 video/quicktime 的问题——安卓微信对 video/quicktime（.mov 容器）支持差，
+    /// 而 mp4 云端路径应标 video/mp4，否则安卓端可能拒绝播放。
+    private static func mimeType(for kind: String, name: String) -> String {
+        let ext = (name as NSString).pathExtension.lowercased()
+        if kind == "video" {
+            switch ext {
+            case "mov": return "video/quicktime"   // 云端已统一转 mp4，此分支仅作兜底
+            case "m4v": return "video/x-m4v"
+            default: return "video/mp4"
+            }
+        }
+        switch ext {
+        case "png": return "image/png"
+        case "heic", "heif": return "image/heic"
+        default: return "image/jpeg"
+        }
+    }
+
+    /// v1.29：视频云端文件名统一为 .mp4（安卓/微信可播），本地文件名保持原样（保存 mov/mp4 原文件）
+    private static func cloudVideoName(for localName: String) -> String {
+        ((localName as NSString).deletingPathExtension) + ".mp4"
     }
 
     private static func upload(data: Data, to remotePath: String, contentType: String, config: CosConfig) async throws {
@@ -1180,11 +1216,7 @@ enum CosUploader {
         guard w > 0, h > 0 else { return nil }
         let scale = min(maxSide / max(w, h), 1)
         let target = CGSize(width: max(Int(w * scale), 1), height: max(Int(h * scale), 1))
-        UIGraphicsBeginImageContextWithOptions(target, false, 1.0)
-        image.draw(in: CGRect(origin: .zero, size: target))
-        let scaled = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        return scaled?.jpegData(compressionQuality: 0.72)
+        return scaledJPEG(image, target: target, quality: 0.72)
     }
 
     // MARK: - v1.27 名片微信二维码压缩
@@ -1197,22 +1229,19 @@ enum CosUploader {
         let side = min(image.size.width, image.size.height)
         guard side > 0 else { return nil }
         // 1. 居中裁剪成正方形
-        UIGraphicsBeginImageContextWithOptions(CGSize(width: side, height: side), false, 1.0)
         let x = (image.size.width - side) / 2
         let y = (image.size.height - side) / 2
-        image.draw(in: CGRect(x: -x, y: -y, width: image.size.width, height: image.size.height))
-        let cropped = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        guard let cropped else { return nil }
+        let cropFormat = UIGraphicsImageRendererFormat.default()
+        cropFormat.scale = 1
+        let cropRenderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: cropFormat)
+        let cropped = cropRenderer.image { _ in
+            image.draw(in: CGRect(x: -x, y: -y, width: image.size.width, height: image.size.height))
+        }
         // 2. 缩到最长边 400
         let maxSide: CGFloat = 400
         let scale = min(maxSide / side, 1)
         let target = CGSize(width: max(Int(side * scale), 1), height: max(Int(side * scale), 1))
-        UIGraphicsBeginImageContextWithOptions(target, false, 1.0)
-        cropped.draw(in: CGRect(origin: .zero, size: target))
-        let scaled = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        return scaled?.jpegData(compressionQuality: 0.85)
+        return scaledJPEG(cropped, target: target, quality: 0.85)
     }
 
     // MARK: - v1.23 分享时压缩（视频 720p / 图片轻压缩）
@@ -1236,6 +1265,52 @@ enum CosUploader {
         return data
     }
 
+    /// v1.29：视频上传数据统一转 mp4（安卓/微信可播）：
+    /// - 压缩开关开 → 720p H.264（重编码，体积小）
+    /// - 压缩开关关 → 原质量转封装（先 passthrough 只换容器、秒级完成且画质零损失；失败回退原质量重编码）
+    /// - 源已是 mp4 且不压缩 → 直接读原数据（零处理）
+    private static func uploadVideoData(from url: URL, compress: Bool) async -> Data? {
+        if !compress, url.pathExtension.lowercased() == "mp4" {
+            return try? Data(contentsOf: url)
+        }
+        if compress {
+            return await compressedVideoData(from: url)
+        }
+        return await mp4ContainerData(from: url)
+    }
+
+    /// 原质量转 mp4 封装：先 passthrough（不重编码，mov→mp4 秒级，画质零损失），
+    /// 不适用时回退 AVAssetExportPresetHighestQuality 原质量重编码。全失败返回 nil，调用方保留原文件。
+    private static func mp4ContainerData(from url: URL) async -> Data? {
+        let asset = AVURLAsset(url: url)
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        if let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) {
+            export.outputURL = temp
+            export.outputFileType = .mp4
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                export.exportAsynchronously { cont.resume() }
+            }
+            if export.status == .completed, let data = try? Data(contentsOf: temp) {
+                return data
+            }
+        }
+
+        if let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) {
+            export.outputURL = temp
+            export.outputFileType = .mp4
+            export.shouldOptimizeForNetworkUse = true
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                export.exportAsynchronously { cont.resume() }
+            }
+            if export.status == .completed, let data = try? Data(contentsOf: temp) {
+                return data
+            }
+        }
+        return nil
+    }
+
     /// 图片轻压缩：长边压到 ≤1600px、JPEG 质量 0.8（参照微信「不加载原图」的画质，不过度压缩，观感基本无损）
     private static func compressedImageData(from url: URL) -> Data? {
         guard let image = UIImage(contentsOfFile: url.path) else { return nil }
@@ -1248,11 +1323,7 @@ enum CosUploader {
             return image.jpegData(compressionQuality: 0.8)
         }
         let target = CGSize(width: max(Int(w * scale), 1), height: max(Int(h * scale), 1))
-        UIGraphicsBeginImageContextWithOptions(target, false, 1.0)
-        image.draw(in: CGRect(origin: .zero, size: target))
-        let scaled = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        return scaled?.jpegData(compressionQuality: 0.8)
+        return scaledJPEG(image, target: target, quality: 0.8)
     }
 
     /// 在签名 URL 上追加版本参数 v。v 不参与签名（q-url-param-list 为空，COS 服务端忽略未声明参数，签名仍有效）；
